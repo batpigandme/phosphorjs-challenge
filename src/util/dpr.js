@@ -14,20 +14,24 @@
  * @param {number} cssHeight
  * @returns {boolean}
  */
+const GRANULARITY = 512;
+
 export function resizeCanvas(canvas, cssWidth, cssHeight) {
 	const dpr = window.devicePixelRatio || 1;
-	const w = Math.max(1, Math.round(cssWidth * dpr));
-	const h = Math.max(1, Math.round(cssHeight * dpr));
-	if (canvas.width === w && canvas.height === h) {
-		// Still update CSS size in case the layout changed by a sub-pixel.
-		canvas.style.width = cssWidth + 'px';
-		canvas.style.height = cssHeight + 'px';
-		return false;
-	}
-	canvas.width = w;
-	canvas.height = h;
+	const needW = Math.max(1, Math.round(cssWidth * dpr));
+	const needH = Math.max(1, Math.round(cssHeight * dpr));
 	canvas.style.width = cssWidth + 'px';
 	canvas.style.height = cssHeight + 'px';
+	const curW = canvas.width;
+	const curH = canvas.height;
+	if (needW <= curW && needH <= curH &&
+		needW > curW - GRANULARITY && needH > curH - GRANULARITY) {
+		return false;
+	}
+	const allocW = (Math.ceil(needW / GRANULARITY) + 1) * GRANULARITY;
+	const allocH = (Math.ceil(needH / GRANULARITY) + 1) * GRANULARITY;
+	canvas.width = allocW;
+	canvas.height = allocH;
 	return true;
 }
 

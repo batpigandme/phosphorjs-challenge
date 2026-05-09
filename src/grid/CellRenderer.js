@@ -77,14 +77,22 @@ export class TextRenderer extends CellRenderer {
 					: '' + v;
 		const color = this._colorIsFn ? this.color(row, col, v) : this.color;
 		ctx.fillStyle = color;
-		ctx.font = this.font;
-		ctx.textBaseline = 'middle';
-		const align = this.align;
-		ctx.textAlign = align;
+		if (ctx._cachedFont !== this.font) {
+			ctx.font = this.font;
+			ctx._cachedFont = this.font;
+		}
+		if (ctx._cachedBaseline !== 'middle') {
+			ctx.textBaseline = 'middle';
+			ctx._cachedBaseline = 'middle';
+		}
+		if (ctx._cachedAlign !== this.align) {
+			ctx.textAlign = this.align;
+			ctx._cachedAlign = this.align;
+		}
 		const pad = this.padding;
 		let tx;
-		if (align === 'center') tx = x + w / 2;
-		else if (align === 'right') tx = x + w - pad;
+		if (this.align === 'center') tx = x + w / 2;
+		else if (this.align === 'right') tx = x + w - pad;
 		else tx = x + pad;
 		ctx.fillText(s, tx, y + h / 2, w - pad * 2);
 	}

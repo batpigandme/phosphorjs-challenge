@@ -433,19 +433,16 @@ export class DataGrid {
 		this._paintScrollbars();
 	}
 
-	// region (rx, ry, rw, rh) is in body-local CSS px (origin = body top-left).
 	_paintBody(rx, ry, rw, rh) {
 		const ctx = this.ctx;
 		const bx = this.rowHeaderWidth;
 		const by = this.colHeaderHeight;
 
-		// Clip to the body region.
 		ctx.save();
 		ctx.beginPath();
 		ctx.rect(bx + rx, by + ry, rw, rh);
 		ctx.clip();
 
-		// Compute visible cell range covering (rx..rx+rw, ry..ry+rh).
 		const x0 = this.scrollX + rx;
 		const y0 = this.scrollY + ry;
 		const x1 = x0 + rw;
@@ -454,39 +451,58 @@ export class DataGrid {
 		const r1 = clampInt(this.rows.indexOf(y1 - 0.0001), 0, this.rows.count - 1);
 		const c0 = clampInt(this.cols.indexOf(x0), 0, this.cols.count - 1);
 		const c1 = clampInt(this.cols.indexOf(x1 - 0.0001), 0, this.cols.count - 1);
+		const nRows = r1 - r0 + 1;
+		const nCols = c1 - c0 + 1;
 
-		// Background fill (theme stripe).
+		// Pre-compute offsets and sizes for all visible rows/cols.
+		const rowYs = new Float64Array(nRows + 1);
+		const rowHs = new Float64Array(nRows);
+		for (let i = 0; i <= nRows; i++) {
+			rowYs[i] = by + this.rows.offsetOf(r0 + i) - this.scrollY;
+		}
+		for (let i = 0; i < nRows; i++) {
+			rowHs[i] = rowYs[i + 1] - rowYs[i];
+		}
+		const colXs = new Float64Array(nCols + 1);
+		const colWs = new Float64Array(nCols);
+		for (let i = 0; i <= nCols; i++) {
+			colXs[i] = bx + this.cols.offsetOf(c0 + i) - this.scrollX;
+		}
+		for (let i = 0; i < nCols; i++) {
+			colWs[i] = colXs[i + 1] - colXs[i];
+		}
+
+		// Background fill.
 		ctx.fillStyle = this._stripe.even;
 		ctx.fillRect(bx + rx, by + ry, rw, rh);
 
-		// Striped rows.
 		if (this._stripe.odd !== this._stripe.even) {
-			for (let r = r0; r <= r1; r++) {
-				if ((r & 1) !== 1) continue;
-				const yy = by + this.rows.offsetOf(r) - this.scrollY;
-				ctx.fillStyle = this._stripe.odd;
-				ctx.fillRect(bx + rx, yy, rw, this.rows.sizeOf(r));
+			ctx.fillStyle = this._stripe.odd;
+			for (let i = 0; i < nRows; i++) {
+				if (((r0 + i) & 1) !== 1) continue;
+				ctx.fillRect(bx + rx, rowYs[i], rw, rowHs[i]);
 			}
 		}
 
-		// Cells: draw text + grid lines per cell.
+		// Cells.
 		ctx.font = BODY_FONT;
 		ctx.textBaseline = 'middle';
 		ctx.textAlign = 'left';
 		ctx.fillStyle = '#000';
-
 		const renderer = this.renderer;
 
-		for (let r = r0; r <= r1; r++) {
-			const yy = by + this.rows.offsetOf(r) - this.scrollY;
-			const rh2 = this.rows.sizeOf(r);
-			for (let c = c0; c <= c1; c++) {
-				const xx = bx + this.cols.offsetOf(c) - this.scrollX;
-				const cw = this.cols.sizeOf(c);
+		for (let ri = 0; ri < nRows; ri++) {
+			const yy = rowYs[ri];
+			const rh2 = rowHs[ri];
+			const row = r0 + ri;
+			for (let ci = 0; ci < nCols; ci++) {
+				const xx = colXs[ci];
+				const cw = colWs[ci];
+				const col = c0 + ci;
 				if (renderer) {
-					renderer.paint(ctx, this.model, r, c, xx, yy, cw, rh2);
+					renderer.paint(ctx, this.model, row, col, xx, yy, cw, rh2);
 				} else {
-					const v = this.model.data(r, c);
+					const v = this.model.data(row, col);
 					ctx.fillStyle = '#000';
 					ctx.fillText(stringify(v), xx + 4, yy + rh2 / 2, cw - 8);
 				}
@@ -497,13 +513,13 @@ export class DataGrid {
 		ctx.strokeStyle = '#d0d0d0';
 		ctx.lineWidth = 1;
 		ctx.beginPath();
-		for (let r = r0; r <= r1 + 1; r++) {
-			const yy = Math.floor(by + this.rows.offsetOf(r) - this.scrollY) + 0.5;
+		for (let i = 0; i <= nRows; i++) {
+			const yy = Math.floor(rowYs[i]) + 0.5;
 			ctx.moveTo(bx + rx, yy);
 			ctx.lineTo(bx + rx + rw, yy);
 		}
-		for (let c = c0; c <= c1 + 1; c++) {
-			const xx = Math.floor(bx + this.cols.offsetOf(c) - this.scrollX) + 0.5;
+		for (let i = 0; i <= nCols; i++) {
+			const xx = Math.floor(colXs[i]) + 0.5;
 			ctx.moveTo(xx, by + ry);
 			ctx.lineTo(xx, by + ry + rh);
 		}

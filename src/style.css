@@ -1,0 +1,209 @@
+:root {
+	--bg: #fafafa;
+	--bg-panel: #ffffff;
+	--border: #c0c0c0;
+	--border-strong: #808080;
+	--text: #000000;
+	--text-muted: #555555;
+	--accent: #2962ff;
+	--tab-bg: #e6e6e6;
+	--tab-bg-active: #ffffff;
+	--tab-bg-hover: #efefef;
+	--header-bg: #f0f0f0;
+	--grid-line: #d0d0d0;
+	--scrollbar-thumb: #b0b0b0;
+	--scrollbar-thumb-hover: #888888;
+	--drop-zone: rgba(41, 98, 255, 0.18);
+	--drop-zone-border: rgba(41, 98, 255, 0.85);
+
+	/* Renderer-stripe themes (Phosphor parity). */
+	--stripe-blue: #f5faff;
+	--stripe-brown: #fff8f0;
+	--stripe-green: #f4fbf4;
+
+	font-family:
+		ui-sans-serif,
+		system-ui,
+		-apple-system,
+		"Segoe UI",
+		Helvetica,
+		Arial,
+		sans-serif;
+	font-size: 13px;
+	color: var(--text);
+}
+
+* {
+	box-sizing: border-box;
+}
+
+html,
+body {
+	margin: 0;
+	padding: 0;
+	height: 100%;
+	width: 100%;
+	overflow: hidden;
+	background: var(--bg);
+}
+
+#root {
+	position: absolute;
+	inset: 0;
+}
+
+/* Dock layout primitives. */
+.dock-root {
+	position: absolute;
+	inset: 0;
+	overflow: hidden;
+	display: flex;
+	background: #ddd;
+}
+
+.dock-split {
+	display: flex;
+	min-width: 0;
+	min-height: 0;
+}
+
+.dock-split.horizontal {
+	flex-direction: row;
+}
+
+.dock-split.vertical {
+	flex-direction: column;
+}
+
+.dock-split-handle {
+	flex: 0 0 6px;
+	background: var(--border);
+	position: relative;
+	z-index: 2;
+	user-select: none;
+}
+
+.dock-split.horizontal > .dock-split-handle {
+	cursor: col-resize;
+}
+
+.dock-split.vertical > .dock-split-handle {
+	cursor: row-resize;
+}
+
+.dock-split-handle:hover {
+	background: var(--accent);
+}
+
+.dock-tabs {
+	flex: 1 1 auto;
+	display: flex;
+	flex-direction: column;
+	background: var(--bg-panel);
+	border: 1px solid var(--border);
+	min-width: 0;
+	min-height: 0;
+}
+
+.dock-tabbar {
+	flex: 0 0 28px;
+	display: flex;
+	flex-direction: row;
+	align-items: stretch;
+	background: var(--header-bg);
+	border-bottom: 1px solid var(--border);
+	overflow: hidden;
+	user-select: none;
+}
+
+.dock-tab {
+	display: flex;
+	align-items: center;
+	padding: 0 14px;
+	font-size: 12px;
+	background: var(--tab-bg);
+	border-right: 1px solid var(--border);
+	cursor: pointer;
+	white-space: nowrap;
+	transition: background-color 80ms ease;
+}
+
+.dock-tab:hover {
+	background: var(--tab-bg-hover);
+}
+
+.dock-tab.active {
+	background: var(--tab-bg-active);
+	font-weight: 500;
+}
+
+.dock-content {
+	flex: 1 1 auto;
+	position: relative;
+	min-height: 0;
+	min-width: 0;
+}
+
+.dock-content > .grid-host {
+	position: absolute;
+	inset: 0;
+	display: none;
+}
+
+.dock-content > .grid-host.active {
+	display: block;
+}
+
+/* Stripe themes applied to the grid host. */
+.theme-blue {
+	background: var(--stripe-blue);
+}
+.theme-brown {
+	background: var(--stripe-brown);
+}
+.theme-green {
+	background: var(--stripe-green);
+}
+
+/* Drag overlay (full window during a tab drag). */
+.drag-overlay {
+	position: fixed;
+	inset: 0;
+	z-index: 100;
+	pointer-events: none;
+}
+
+.drop-preview {
+	position: absolute;
+	background: var(--drop-zone);
+	border: 2px solid var(--drop-zone-border);
+	border-radius: 2px;
+	transition:
+		left 80ms ease,
+		top 80ms ease,
+		width 80ms ease,
+		height 80ms ease;
+}
+
+.drag-ghost {
+	position: fixed;
+	pointer-events: none;
+	z-index: 101;
+	background: var(--tab-bg-active);
+	border: 1px solid var(--border-strong);
+	padding: 4px 10px;
+	font-size: 12px;
+	box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+	opacity: 0.9;
+}
+
+/* Loading placeholder. */
+.loading {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: var(--text-muted);
+	font-size: 12px;
+}

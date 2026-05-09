@@ -119,13 +119,41 @@ body {
 .dock-tab {
 	display: flex;
 	align-items: center;
-	padding: 0 14px;
+	gap: 6px;
+	padding: 0 6px 0 14px;
 	font-size: 12px;
 	background: var(--tab-bg);
 	border-right: 1px solid var(--border);
 	cursor: pointer;
 	white-space: nowrap;
 	transition: background-color 80ms ease;
+}
+
+.dock-tab-label {
+	pointer-events: none;
+}
+
+.dock-tab-close {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 16px;
+	height: 16px;
+	font-size: 14px;
+	line-height: 1;
+	border-radius: 3px;
+	color: var(--text-muted);
+	opacity: 0;
+	transition: opacity 80ms ease, background-color 80ms ease;
+}
+
+.dock-tab:hover .dock-tab-close {
+	opacity: 1;
+}
+
+.dock-tab-close:hover {
+	background: rgba(0, 0, 0, 0.1);
+	color: var(--text);
 }
 
 .dock-tab:hover {

@@ -112,8 +112,20 @@ export class DockPanel {
 			const tab = node.tabs[i];
 			const tabEl = document.createElement('div');
 			tabEl.className = 'dock-tab' + (i === node.activeIndex ? ' active' : '');
-			tabEl.textContent = tab.title;
 			tabEl.dataset.tabId = tab.id;
+			const label = document.createElement('span');
+			label.className = 'dock-tab-label';
+			label.textContent = tab.title;
+			tabEl.appendChild(label);
+			const close = document.createElement('span');
+			close.className = 'dock-tab-close';
+			close.textContent = '×';
+			close.addEventListener('pointerdown', (e) => {
+				e.stopPropagation();
+				if (e.button !== 0) return;
+				this._closeTab(tab.id);
+			});
+			tabEl.appendChild(close);
 			this._wireTab(tabEl, node, i);
 			bar.appendChild(tabEl);
 			tab.host.classList.toggle('active', i === node.activeIndex);
@@ -315,6 +327,14 @@ export class DockPanel {
 			}
 		} else {
 			this.root = dropTab(this.root, tab, target.leaf, target.mode);
+		}
+		this._render();
+	}
+
+	_closeTab(tabId) {
+		this.root = removeTab(this.root, tabId);
+		if (!this.root) {
+			this.root = makeTabs([]);
 		}
 		this._render();
 	}

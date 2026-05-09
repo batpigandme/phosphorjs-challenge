@@ -37,10 +37,10 @@ export class StreamingDataModel extends DataModel {
 		const idx = ((this._head + row) % this._cap) * this._cols + col;
 		return this._buf[idx];
 	}
-	columnHeader(col) {
+	columnHeaderData(row, col) {
 		return 'C' + col;
 	}
-	rowHeader(row) {
+	rowHeaderData(row, col) {
 		return String(row);
 	}
 	_tick() {

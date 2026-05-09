@@ -48,10 +48,10 @@ export class JSONModel extends DataModel {
 	data(row, col) {
 		return ROWS[row][col];
 	}
-	columnHeader(col) {
+	columnHeaderData(row, col) {
 		return SCHEMA[col];
 	}
-	rowHeader(row) {
+	rowHeaderData(row, col) {
 		return String(row);
 	}
 }

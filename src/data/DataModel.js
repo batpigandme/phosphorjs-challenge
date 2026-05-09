@@ -25,28 +25,29 @@ export class DataModel {
 		this._listeners = new Set();
 	}
 
-	/** Number of rows. Override. */
 	rowCount() {
 		return 0;
 	}
-	/** Number of columns. Override. */
 	columnCount() {
 		return 0;
 	}
-	/**
-	 * Cell value at (row, col). Override. Should return a string or number;
-	 * renderers know how to format both.
-	 */
 	data(row, col) {
 		return '';
 	}
-	/** Optional column-header label. Default: column index. */
-	columnHeader(col) {
-		return String(col);
+	headerRowCount() {
+		return 1;
 	}
-	/** Optional row-header label. Default: row index. */
-	rowHeader(row) {
+	headerColumnCount() {
+		return 1;
+	}
+	columnHeaderData(row, col) {
+		return 'C ' + col;
+	}
+	rowHeaderData(row, col) {
 		return String(row);
+	}
+	cornerHeaderData(row, col) {
+		return '';
 	}
 
 	on(fn) {

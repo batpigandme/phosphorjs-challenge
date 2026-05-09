@@ -56,18 +56,21 @@ export class DataGrid {
 		this.model = opts.model;
 		this.rowHeight = opts.rowHeight ?? 20;
 		this.colWidth = opts.colWidth ?? 64;
-		this.rowHeaderWidth = opts.rowHeaderWidth ?? 64;
-		this.colHeaderHeight = opts.colHeaderHeight ?? 24;
+		this.headerColWidth = opts.headerColWidth ?? 64;
+		this.headerRowHeight = opts.colHeaderHeight ?? 24;
 		this.theme = opts.theme ?? null;
 		this.renderer = opts.renderer ?? null;
+
+		this._headerRowCount = this.model.headerRowCount();
+		this._headerColCount = this.model.headerColumnCount();
+		this.colHeaderHeight = this.headerRowHeight * this._headerRowCount;
+		this.rowHeaderWidth = this.headerColWidth * this._headerColCount;
 
 		this.rows = new SectionList(this.model.rowCount(), this.rowHeight);
 		this.cols = new SectionList(this.model.columnCount(), this.colWidth);
 
-		// Dimensions in CSS pixels.
 		this.cssWidth = 0;
 		this.cssHeight = 0;
-		// Body region (excludes headers + scrollbars).
 		this.bodyW = 0;
 		this.bodyH = 0;
 		// Scroll position in body-pixel coordinates.
@@ -447,6 +450,8 @@ export class DataGrid {
 	_paintColumnHeaders(rx, _ry, rw, rh) {
 		const ctx = this.ctx;
 		const bx = this.rowHeaderWidth;
+		const hrc = this._headerRowCount;
+		const hrh = this.headerRowHeight;
 		ctx.save();
 		ctx.beginPath();
 		ctx.rect(bx + rx, 0, rw, rh);
@@ -463,31 +468,45 @@ export class DataGrid {
 		ctx.textBaseline = 'middle';
 		ctx.textAlign = 'center';
 		ctx.fillStyle = '#000';
-		for (let c = c0; c <= c1; c++) {
-			const xx = bx + this.cols.offsetOf(c) - this.scrollX;
-			const cw = this.cols.sizeOf(c);
-			ctx.fillText(this.model.columnHeader(c), xx + cw / 2, rh / 2, cw - 6);
+		for (let hr = 0; hr < hrc; hr++) {
+			const yy = hr * hrh;
+			for (let c = c0; c <= c1; c++) {
+				const xx = bx + this.cols.offsetOf(c) - this.scrollX;
+				const cw = this.cols.sizeOf(c);
+				ctx.fillStyle = '#000';
+				ctx.fillText(this.model.columnHeaderData(hr, c), xx + cw / 2, yy + hrh / 2, cw - 6);
+			}
 		}
 
-		// bottom border + cell separators
-		ctx.strokeStyle = '#a0a0a0';
+		ctx.strokeStyle = '#d0d0d0';
 		ctx.lineWidth = 1;
 		ctx.beginPath();
-		ctx.moveTo(bx + rx, rh - 0.5);
-		ctx.lineTo(bx + rx + rw, rh - 0.5);
-		ctx.strokeStyle = '#d0d0d0';
+		for (let hr = 0; hr <= hrc; hr++) {
+			const yy = Math.floor(hr * hrh) - 0.5;
+			ctx.moveTo(bx + rx, yy);
+			ctx.lineTo(bx + rx + rw, yy);
+		}
 		for (let c = c0; c <= c1 + 1; c++) {
 			const xx = Math.floor(bx + this.cols.offsetOf(c) - this.scrollX) + 0.5;
 			ctx.moveTo(xx, 0);
 			ctx.lineTo(xx, rh);
 		}
 		ctx.stroke();
+
+		ctx.strokeStyle = '#a0a0a0';
+		ctx.beginPath();
+		ctx.moveTo(bx + rx, rh - 0.5);
+		ctx.lineTo(bx + rx + rw, rh - 0.5);
+		ctx.stroke();
+
 		ctx.restore();
 	}
 
 	_paintRowHeaders(_rx, ry, rw, rh) {
 		const ctx = this.ctx;
 		const by = this.colHeaderHeight;
+		const hcc = this._headerColCount;
+		const hcw = this.headerColWidth;
 		ctx.save();
 		ctx.beginPath();
 		ctx.rect(0, by + ry, rw, rh);
@@ -502,39 +521,91 @@ export class DataGrid {
 
 		ctx.font = HEADER_FONT;
 		ctx.textBaseline = 'middle';
-		ctx.textAlign = 'right';
 		ctx.fillStyle = '#000';
 		for (let r = r0; r <= r1; r++) {
 			const yy = by + this.rows.offsetOf(r) - this.scrollY;
 			const rh2 = this.rows.sizeOf(r);
-			ctx.fillText(this.model.rowHeader(r), rw - 6, yy + rh2 / 2, rw - 8);
+			for (let hc = 0; hc < hcc; hc++) {
+				const xx = hc * hcw;
+				ctx.textAlign = hc === hcc - 1 ? 'right' : 'center';
+				const xAnchor = hc === hcc - 1 ? xx + hcw - 6 : xx + hcw / 2;
+				ctx.fillStyle = '#000';
+				ctx.fillText(this.model.rowHeaderData(r, hc), xAnchor, yy + rh2 / 2, hcw - 8);
+			}
 		}
 
-		ctx.strokeStyle = '#a0a0a0';
+		ctx.strokeStyle = '#d0d0d0';
 		ctx.lineWidth = 1;
 		ctx.beginPath();
-		ctx.moveTo(rw - 0.5, by + ry);
-		ctx.lineTo(rw - 0.5, by + ry + rh);
-		ctx.strokeStyle = '#d0d0d0';
+		for (let hc = 0; hc <= hcc; hc++) {
+			const xx = Math.floor(hc * hcw) + 0.5;
+			ctx.moveTo(xx, by + ry);
+			ctx.lineTo(xx, by + ry + rh);
+		}
 		for (let r = r0; r <= r1 + 1; r++) {
 			const yy = Math.floor(by + this.rows.offsetOf(r) - this.scrollY) + 0.5;
 			ctx.moveTo(0, yy);
 			ctx.lineTo(rw, yy);
 		}
 		ctx.stroke();
+
+		ctx.strokeStyle = '#a0a0a0';
+		ctx.beginPath();
+		ctx.moveTo(rw - 0.5, by + ry);
+		ctx.lineTo(rw - 0.5, by + ry + rh);
+		ctx.stroke();
+
 		ctx.restore();
 	}
 
 	_paintCorner() {
 		const ctx = this.ctx;
+		const rhw = this.rowHeaderWidth;
+		const chh = this.colHeaderHeight;
+		const hrc = this._headerRowCount;
+		const hcc = this._headerColCount;
+		const hrh = this.headerRowHeight;
+		const hcw = this.headerColWidth;
+
 		ctx.fillStyle = '#e0e0e0';
-		ctx.fillRect(0, 0, this.rowHeaderWidth, this.colHeaderHeight);
+		ctx.fillRect(0, 0, rhw, chh);
+
+		ctx.font = HEADER_FONT;
+		ctx.textBaseline = 'middle';
+		ctx.textAlign = 'center';
+		ctx.fillStyle = '#000';
+		for (let hr = 0; hr < hrc; hr++) {
+			for (let hc = 0; hc < hcc; hc++) {
+				const xx = hc * hcw;
+				const yy = hr * hrh;
+				ctx.fillText(
+					this.model.cornerHeaderData(hr, hc),
+					xx + hcw / 2, yy + hrh / 2, hcw - 8
+				);
+			}
+		}
+
+		ctx.strokeStyle = '#d0d0d0';
+		ctx.lineWidth = 1;
+		ctx.beginPath();
+		for (let hr = 1; hr < hrc; hr++) {
+			const yy = Math.floor(hr * hrh) + 0.5;
+			ctx.moveTo(0, yy);
+			ctx.lineTo(rhw, yy);
+		}
+		for (let hc = 1; hc < hcc; hc++) {
+			const xx = Math.floor(hc * hcw) + 0.5;
+			ctx.moveTo(xx, 0);
+			ctx.lineTo(xx, chh);
+		}
+		ctx.stroke();
+
 		ctx.strokeStyle = '#a0a0a0';
 		ctx.beginPath();
-		ctx.moveTo(this.rowHeaderWidth - 0.5, 0);
-		ctx.lineTo(this.rowHeaderWidth - 0.5, this.colHeaderHeight);
-		ctx.moveTo(0, this.colHeaderHeight - 0.5);
-		ctx.lineTo(this.rowHeaderWidth, this.colHeaderHeight - 0.5);
+		ctx.moveTo(rhw - 0.5, 0);
+		ctx.lineTo(rhw - 0.5, chh);
+		ctx.moveTo(0, chh - 0.5);
+		ctx.lineTo(rhw, chh - 0.5);
 		ctx.stroke();
 	}
 

@@ -32,10 +32,10 @@ export class RandomDataModel extends DataModel {
 		// monomorphic in Float64Array; the result is unboxed.
 		return this._buf[row * this._cols + col];
 	}
-	columnHeader(col) {
+	columnHeaderData(row, col) {
 		return String(col);
 	}
-	rowHeader(row) {
+	rowHeaderData(row, col) {
 		return String(row);
 	}
 	_tick() {

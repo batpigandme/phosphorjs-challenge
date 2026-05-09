@@ -19,16 +19,21 @@ export class LargeDataModel extends DataModel {
 		return this._cols;
 	}
 	data(row, col) {
-		// Allocates a string per call; this is the cell-renderer's hot path.
-		// We could intern the most-recent N strings if it shows up in profiles,
-		// but `(r, c)` formatting is cheap and the JIT handles small-string
-		// concatenation well.
 		return '(' + row + ', ' + col + ')';
 	}
-	columnHeader(col) {
-		return 'C ' + col;
+	headerRowCount() {
+		return 2;
 	}
-	rowHeader(row) {
-		return String(row);
+	headerColumnCount() {
+		return 3;
+	}
+	columnHeaderData(row, col) {
+		return 'C: ' + row + ', ' + col;
+	}
+	rowHeaderData(row, col) {
+		return 'R: ' + row + ', ' + col;
+	}
+	cornerHeaderData(row, col) {
+		return 'N: ' + row + ', ' + col;
 	}
 }

@@ -109,9 +109,11 @@ export class DataGrid {
 		this._onWheel = this._onWheel.bind(this);
 		this.canvas.addEventListener('wheel', this._onWheel, { passive: false });
 
-		// Scrollbar drag.
+		// Pointer interactions: scrollbar drag, column/row resize.
 		this._onPointerDown = this._onPointerDown.bind(this);
 		this.canvas.addEventListener('pointerdown', this._onPointerDown);
+		this._onPointerMove = this._onPointerMove.bind(this);
+		this.canvas.addEventListener('pointermove', this._onPointerMove);
 
 		// Subscribe to model changes.
 		this._onModelChange = this._onModelChange.bind(this);
@@ -124,6 +126,7 @@ export class DataGrid {
 		cancel(this._paint);
 		this._ro.disconnect();
 		this.canvas.removeEventListener('wheel', this._onWheel);
+		this.canvas.removeEventListener('pointermove', this._onPointerMove);
 		this.model.off(this._onModelChange);
 		this.host.removeChild(this.canvas);
 	}
@@ -190,18 +193,83 @@ export class DataGrid {
 		this.scrollBy(e.deltaX * factor, e.deltaY * factor);
 	}
 
-	// Scrollbar drag. Hit-test the click against the scrollbar tracks; if it
-	// lands on a thumb, start a drag; if on a track, page-jump.
+	_hitResizeHandle(x, y) {
+		const GRAB = 4;
+		if (y < this.colHeaderHeight && x > this.rowHeaderWidth) {
+			const bx = x - this.rowHeaderWidth + this.scrollX;
+			const c = this.cols.indexOf(bx);
+			if (c >= 0 && c < this.cols.count) {
+				const edge = this.cols.offsetOf(c + 1) - this.scrollX + this.rowHeaderWidth;
+				if (Math.abs(x - edge) <= GRAB) return { axis: 'col', index: c };
+				if (c > 0) {
+					const prevEdge = this.cols.offsetOf(c) - this.scrollX + this.rowHeaderWidth;
+					if (Math.abs(x - prevEdge) <= GRAB) return { axis: 'col', index: c - 1 };
+				}
+			}
+		}
+		if (x < this.rowHeaderWidth && y > this.colHeaderHeight) {
+			const by = y - this.colHeaderHeight + this.scrollY;
+			const r = this.rows.indexOf(by);
+			if (r >= 0 && r < this.rows.count) {
+				const edge = this.rows.offsetOf(r + 1) - this.scrollY + this.colHeaderHeight;
+				if (Math.abs(y - edge) <= GRAB) return { axis: 'row', index: r };
+				if (r > 0) {
+					const prevEdge = this.rows.offsetOf(r) - this.scrollY + this.colHeaderHeight;
+					if (Math.abs(y - prevEdge) <= GRAB) return { axis: 'row', index: r - 1 };
+				}
+			}
+		}
+		return null;
+	}
+
+	_onPointerMove(e) {
+		if (this._resizing) return;
+		const rect = this.canvas.getBoundingClientRect();
+		const x = e.clientX - rect.left;
+		const y = e.clientY - rect.top;
+		const hit = this._hitResizeHandle(x, y);
+		this.canvas.style.cursor = hit ? (hit.axis === 'col' ? 'ew-resize' : 'ns-resize') : 'default';
+	}
+
 	_onPointerDown(e) {
 		if (e.button !== 0) return;
 		const rect = this.canvas.getBoundingClientRect();
 		const x = e.clientX - rect.left;
 		const y = e.clientY - rect.top;
-		// Vertical scrollbar region.
+
+		// Column/row resize.
+		const hit = this._hitResizeHandle(x, y);
+		if (hit) {
+			e.preventDefault();
+			this.canvas.setPointerCapture(e.pointerId);
+			this._resizing = true;
+			const startPx = hit.axis === 'col' ? e.clientX : e.clientY;
+			const list = hit.axis === 'col' ? this.cols : this.rows;
+			const startSize = list.sizeOf(hit.index);
+			const move = (ev) => {
+				const delta = (hit.axis === 'col' ? ev.clientX : ev.clientY) - startPx;
+				const newSize = Math.max(20, startSize + delta);
+				list.setSize(hit.index, newSize);
+				this._mode = 'full';
+				invalidate(this._paint);
+			};
+			const up = () => {
+				this.canvas.releasePointerCapture(e.pointerId);
+				this.canvas.removeEventListener('pointermove', move);
+				this.canvas.removeEventListener('pointerup', up);
+				this.canvas.removeEventListener('pointercancel', up);
+				this._resizing = false;
+			};
+			this.canvas.addEventListener('pointermove', move);
+			this.canvas.addEventListener('pointerup', up);
+			this.canvas.addEventListener('pointercancel', up);
+			return;
+		}
+
+		// Scrollbar drag.
 		const vTrackX = this.cssWidth - SCROLLBAR_SIZE;
 		const vTrackY = this.colHeaderHeight;
 		const vTrackH = this.bodyH;
-		// Horizontal scrollbar region.
 		const hTrackX = this.rowHeaderWidth;
 		const hTrackY = this.cssHeight - SCROLLBAR_SIZE;
 		const hTrackW = this.bodyW;
@@ -225,8 +293,6 @@ export class DataGrid {
 			if (hi <= lo) return 0;
 			return clamp((cursorPx - thumbLen / 2 - lo) / (hi - lo), 0, 1);
 		};
-		// If pointer is on the thumb, preserve the offset within the thumb so
-		// the thumb doesn't jump.
 		const startCursor = axis === 'y' ? y : x;
 		const startFrac =
 			scrollMax === 0 ? 0 : (axis === 'y' ? this.scrollY : this.scrollX) / scrollMax;
@@ -240,7 +306,6 @@ export class DataGrid {
 			if (axis === 'y') this.scrollTo(this.scrollX, target);
 			else this.scrollTo(target, this.scrollY);
 		};
-		// Initial jump for track-clicks (not on thumb).
 		if (!onThumb) apply(startCursor);
 		const move = (ev) => {
 			const r = this.canvas.getBoundingClientRect();

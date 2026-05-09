@@ -4,6 +4,8 @@ import { defineConfig } from 'vite';
 // and arrow functions without polyfills — keeps the bundle small and lets V8
 // see modern shapes directly.
 export default defineConfig({
+	// GitHub Pages serves from /<repo-name>/ — set base so all asset paths resolve.
+	base: '/phosphorjs-challenge/',
 	build: {
 		target: 'esnext',
 		minify: 'esbuild',

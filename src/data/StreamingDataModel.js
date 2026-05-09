@@ -24,7 +24,7 @@ export class StreamingDataModel extends DataModel {
 	_makeRow() {
 		const row = new Float64Array(this._cols);
 		for (let c = 0; c < this._cols; c++) {
-			row[c] = this._rng() * 100;
+			row[c] = this._rng();
 		}
 		return row;
 	}
@@ -42,10 +42,13 @@ export class StreamingDataModel extends DataModel {
 		return this._data[row][col];
 	}
 	columnHeaderData(row, col) {
-		return 'C' + col;
+		return 'C: ' + row + ', ' + col;
 	}
 	rowHeaderData(row, col) {
-		return String(row);
+		return 'R: ' + row + ', ' + col;
+	}
+	cornerHeaderData(row, col) {
+		return 'N: ' + row + ', ' + col;
 	}
 	_tick() {
 		const nr = this._data.length;

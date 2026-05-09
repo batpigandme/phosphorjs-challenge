@@ -32,11 +32,21 @@ import { invalidate, cancel } from '../util/raf.js';
 import { resizeCanvas, applyDpr } from '../util/dpr.js';
 import { notePaint } from '../util/fps.js';
 import { SectionList } from './sectionList.js';
+import { SelectionModel } from './SelectionModel.js';
 
 const HEADER_FONT = '12px ui-sans-serif, system-ui, sans-serif';
 const BODY_FONT = '12px ui-sans-serif, system-ui, sans-serif';
 const SCROLLBAR_SIZE = 12;
 const MIN_THUMB = 24;
+
+// Pre-allocated scratch arrays for _paintBody; avoids one Float64Array allocation
+// per paint call (4 arrays × 60 fps × 5 grids = 1200 allocs/s eliminated).
+// 512 entries covers any realistic viewport at >= 4px min cell size.
+const MAX_SCRATCH = 512;
+const _scratchRowYs = new Float64Array(MAX_SCRATCH + 1);
+const _scratchRowHs = new Float64Array(MAX_SCRATCH);
+const _scratchColXs = new Float64Array(MAX_SCRATCH + 1);
+const _scratchColWs = new Float64Array(MAX_SCRATCH);
 
 export class DataGrid {
 	/**
@@ -48,7 +58,10 @@ export class DataGrid {
 	 *   rowHeaderWidth?: number,
 	 *   colHeaderHeight?: number,
 	 *   theme?: 'blue'|'brown'|'green'|null,
-	 *   renderer?: import('./CellRenderer.js').CellRenderer | null
+	 *   renderer?: import('./CellRenderer.js').CellRenderer | null,
+	 *   selectionMode?: 'cell'|'row'|'column',
+	 *   stretchLastColumn?: boolean,
+	 *   selectionStyle?: { fill?: string, border?: string, cursorBorder?: string }
 	 * }} opts
 	 */
 	constructor(host, opts) {
@@ -60,6 +73,7 @@ export class DataGrid {
 		this.headerRowHeight = opts.colHeaderHeight ?? 24;
 		this.theme = opts.theme ?? null;
 		this.renderer = opts.renderer ?? null;
+		this.stretchLastColumn = opts.stretchLastColumn ?? false;
 
 		this._headerRowCount = this.model.headerRowCount();
 		this._headerColCount = this.model.headerColumnCount();
@@ -73,49 +87,67 @@ export class DataGrid {
 		this.cssHeight = 0;
 		this.bodyW = 0;
 		this.bodyH = 0;
-		// Scroll position in body-pixel coordinates.
 		this.scrollX = 0;
 		this.scrollY = 0;
-		// Previous scroll for blit decisions.
 		this._prevScrollX = 0;
 		this._prevScrollY = 0;
-		// Repaint mode for the next frame.
 		/** @type {'full'|'scroll'|'cells'} */
 		this._mode = 'full';
 
-		// Stripe theme colors looked up once.
 		this._stripe = stripeFor(this.theme);
 
-		// Build DOM: a positioned canvas inside `host`.
+		// Selection.
+		const sm = opts.selectionMode ?? 'cell';
+		this.selection = new SelectionModel(sm);
+		this._selStyle = {
+			fill: opts.selectionStyle?.fill ?? 'rgba(41, 98, 255, 0.15)',
+			border: opts.selectionStyle?.border ?? 'rgba(41, 98, 255, 0.7)',
+			cursorBorder: opts.selectionStyle?.cursorBorder ?? 'rgba(41, 98, 255, 1.0)'
+		};
+		this.selection.onChange(() => {
+			// Selection changes don't need a full body repaint — both _paintFull
+			// and _paintScroll overlay selections after the body. Only escalate
+			// to 'full' if we're currently idle (mode==='cells'), not if a scroll
+			// is already pending.
+			if (this._mode === 'cells') this._mode = 'full';
+			invalidate(this._paint);
+		});
+		this._autoScrollTimer = 0;
+		this._draggingSelection = false;
+
+		// Build DOM.
 		host.classList.add('grid-host');
 		if (this.theme) host.classList.add('theme-' + this.theme);
 		this.canvas = document.createElement('canvas');
 		this.canvas.style.position = 'absolute';
 		this.canvas.style.inset = '0';
 		this.canvas.style.cursor = 'default';
+		this.canvas.tabIndex = 0;
+		this.canvas.style.outline = 'none';
 		host.appendChild(this.canvas);
 		const ctx = this.canvas.getContext('2d', { alpha: false });
 		if (!ctx) throw new Error('2d context unavailable');
 		this.ctx = ctx;
 
-		// Bound paint callback so the rAF scheduler keys on a stable identity.
 		this._paint = this._paint.bind(this);
 
-		// Resize via ResizeObserver — only the affected element reflows.
 		this._ro = new ResizeObserver(() => this._handleResize());
 		this._ro.observe(host);
 
-		// Wheel scrolling.
 		this._onWheel = this._onWheel.bind(this);
 		this.canvas.addEventListener('wheel', this._onWheel, { passive: false });
 
-		// Pointer interactions: scrollbar drag, column/row resize.
 		this._onPointerDown = this._onPointerDown.bind(this);
 		this.canvas.addEventListener('pointerdown', this._onPointerDown);
 		this._onPointerMove = this._onPointerMove.bind(this);
 		this.canvas.addEventListener('pointermove', this._onPointerMove);
 
-		// Subscribe to model changes.
+		this._onKeyDown = this._onKeyDown.bind(this);
+		this.canvas.addEventListener('keydown', this._onKeyDown);
+
+		this._onCopy = this._onCopy.bind(this);
+		this.canvas.addEventListener('copy', this._onCopy);
+
 		this._onModelChange = this._onModelChange.bind(this);
 		this.model.on(this._onModelChange);
 
@@ -125,19 +157,23 @@ export class DataGrid {
 	dispose() {
 		cancel(this._paint);
 		this._ro.disconnect();
+		if (this._autoScrollTimer) clearInterval(this._autoScrollTimer);
 		this.canvas.removeEventListener('wheel', this._onWheel);
 		this.canvas.removeEventListener('pointermove', this._onPointerMove);
+		this.canvas.removeEventListener('keydown', this._onKeyDown);
+		this.canvas.removeEventListener('copy', this._onCopy);
 		this.model.off(this._onModelChange);
 		this.host.removeChild(this.canvas);
 	}
 
 	_onModelChange(change) {
-		// Update section lists for row insert/remove; cell changes just dirty-paint.
 		if (change && typeof change === 'object') {
 			if (change.kind === 0 /* ROWS_INSERTED */) {
 				this.rows.insert(change.index, change.span);
+				this.selection.onRowsInserted(change.index, change.span);
 			} else if (change.kind === 1 /* ROWS_REMOVED */) {
 				this.rows.remove(change.index, change.span);
+				this.selection.onRowsRemoved(change.index, change.span);
 			} else if (change.kind === 2 /* COLUMNS_INSERTED */) {
 				this.cols.insert(change.index, change.span);
 			} else if (change.kind === 3 /* COLUMNS_REMOVED */) {
@@ -147,6 +183,7 @@ export class DataGrid {
 				this.cols = new SectionList(this.model.columnCount(), this.colWidth);
 				this.scrollX = 0;
 				this.scrollY = 0;
+				this.selection.clear();
 			}
 		}
 		this._mode = 'full';
@@ -160,8 +197,17 @@ export class DataGrid {
 		this.bodyW = Math.max(0, this.cssWidth - this.rowHeaderWidth - SCROLLBAR_SIZE);
 		this.bodyH = Math.max(0, this.cssHeight - this.colHeaderHeight - SCROLLBAR_SIZE);
 		const changed = resizeCanvas(this.canvas, this.cssWidth, this.cssHeight);
+		if (this.stretchLastColumn) this._applyStretchLastColumn();
 		this._mode = 'full';
-		if (changed || true) invalidate(this._paint);
+		invalidate(this._paint);
+	}
+
+	_applyStretchLastColumn() {
+		const n = this.cols.count;
+		if (n === 0) return;
+		const totalWithoutLast = this.cols.totalSize() - this.cols.sizeOf(n - 1);
+		const needed = Math.max(this.colWidth, this.bodyW - totalWithoutLast);
+		this.cols.setSize(n - 1, needed);
 	}
 
 	// Maximum scrollable distance in px on each axis.
@@ -231,6 +277,37 @@ export class DataGrid {
 		this.canvas.style.cursor = hit ? (hit.axis === 'col' ? 'ew-resize' : 'ns-resize') : 'default';
 	}
 
+	_hitTestBody(canvasX, canvasY) {
+		const bx = this.rowHeaderWidth;
+		const by = this.colHeaderHeight;
+		if (canvasX < bx || canvasY < by) return null;
+		if (canvasX >= bx + this.bodyW || canvasY >= by + this.bodyH) return null;
+		const bodyPxX = canvasX - bx + this.scrollX;
+		const bodyPxY = canvasY - by + this.scrollY;
+		const row = this.rows.indexOf(bodyPxY);
+		const col = this.cols.indexOf(bodyPxX);
+		if (row < 0 || row >= this.rows.count || col < 0 || col >= this.cols.count) return null;
+		return { row, col };
+	}
+
+	_scrollToCursor() {
+		const r = this.selection.cursorRow;
+		const c = this.selection.cursorCol;
+		if (r < 0 || c < 0) return;
+		const bx = this.rowHeaderWidth;
+		const by = this.colHeaderHeight;
+		const cellTop = this.rows.offsetOf(r);
+		const cellBot = cellTop + this.rows.sizeOf(r);
+		const cellLeft = this.cols.offsetOf(c);
+		const cellRight = cellLeft + this.cols.sizeOf(c);
+		let sx = this.scrollX, sy = this.scrollY;
+		if (cellBot > sy + this.bodyH) sy = cellBot - this.bodyH;
+		if (cellTop < sy) sy = cellTop;
+		if (cellRight > sx + this.bodyW) sx = cellRight - this.bodyW;
+		if (cellLeft < sx) sx = cellLeft;
+		if (sx !== this.scrollX || sy !== this.scrollY) this.scrollTo(sx, sy);
+	}
+
 	_onPointerDown(e) {
 		if (e.button !== 0) return;
 		const rect = this.canvas.getBoundingClientRect();
@@ -263,6 +340,81 @@ export class DataGrid {
 			this.canvas.addEventListener('pointermove', move);
 			this.canvas.addEventListener('pointerup', up);
 			this.canvas.addEventListener('pointercancel', up);
+			return;
+		}
+
+		// Body click → selection.
+		const bodyHit = this._hitTestBody(x, y);
+		if (bodyHit) {
+			e.preventDefault();
+			this.canvas.focus();
+			const extend = e.shiftKey;
+			const add = e.ctrlKey || e.metaKey;
+			if (extend) {
+				this.selection.resizeTo(bodyHit.row, bodyHit.col);
+				this.selection.cursorRow = bodyHit.row;
+				this.selection.cursorCol = bodyHit.col;
+				this.selection._emit();
+			} else {
+				this.selection.select(bodyHit.row, bodyHit.col, add ? 'none' : 'all');
+			}
+			this._scrollToCursor();
+			this._startDragSelect(e, bodyHit);
+			return;
+		}
+
+		// Row header click → select row.
+		if (x < this.rowHeaderWidth && y >= this.colHeaderHeight && y < this.colHeaderHeight + this.bodyH) {
+			e.preventDefault();
+			this.canvas.focus();
+			const bodyPxY = y - this.colHeaderHeight + this.scrollY;
+			const row = this.rows.indexOf(bodyPxY);
+			if (row >= 0 && row < this.rows.count) {
+				const extend = e.shiftKey;
+				const add = e.ctrlKey || e.metaKey;
+				if (extend) {
+					this.selection.resizeTo(row, this.selection.cursorCol);
+					this.selection.cursorRow = row;
+					this.selection._emit();
+				} else {
+					const oldMode = this.selection.mode;
+					this.selection.mode = 'row';
+					this.selection.select(row, 0, add ? 'none' : 'all');
+					this.selection.mode = oldMode;
+				}
+			}
+			return;
+		}
+
+		// Column header click → select column.
+		if (y < this.colHeaderHeight && x >= this.rowHeaderWidth && x < this.rowHeaderWidth + this.bodyW) {
+			e.preventDefault();
+			this.canvas.focus();
+			const bodyPxX = x - this.rowHeaderWidth + this.scrollX;
+			const col = this.cols.indexOf(bodyPxX);
+			if (col >= 0 && col < this.cols.count) {
+				const extend = e.shiftKey;
+				const add = e.ctrlKey || e.metaKey;
+				if (extend) {
+					this.selection.resizeTo(this.selection.cursorRow, col);
+					this.selection.cursorCol = col;
+					this.selection._emit();
+				} else {
+					const oldMode = this.selection.mode;
+					this.selection.mode = 'column';
+					this.selection.select(0, col, add ? 'none' : 'all');
+					this.selection.mode = oldMode;
+				}
+			}
+			return;
+		}
+
+		// Corner click → select all.
+		if (x < this.rowHeaderWidth && y < this.colHeaderHeight) {
+			e.preventDefault();
+			this.canvas.focus();
+			this.selection.select(0, 0, 'all');
+			this.selection.resizeTo(this.rows.count - 1, this.cols.count - 1);
 			return;
 		}
 
@@ -324,6 +476,148 @@ export class DataGrid {
 		this.canvas.addEventListener('pointercancel', up);
 	}
 
+	_startDragSelect(startEvent, startHit) {
+		this.canvas.setPointerCapture(startEvent.pointerId);
+		this._draggingSelection = true;
+		const AUTO_MARGIN = 20;
+		const AUTO_SPEED = 8;
+		let lastClientX = startEvent.clientX;
+		let lastClientY = startEvent.clientY;
+
+		const autoScroll = () => {
+			const rect = this.canvas.getBoundingClientRect();
+			const lx = lastClientX - rect.left;
+			const ly = lastClientY - rect.top;
+			let dx = 0, dy = 0;
+			const bodyRight = this.rowHeaderWidth + this.bodyW;
+			const bodyBottom = this.colHeaderHeight + this.bodyH;
+			if (lx < this.rowHeaderWidth + AUTO_MARGIN) dx = -AUTO_SPEED;
+			else if (lx > bodyRight - AUTO_MARGIN) dx = AUTO_SPEED;
+			if (ly < this.colHeaderHeight + AUTO_MARGIN) dy = -AUTO_SPEED;
+			else if (ly > bodyBottom - AUTO_MARGIN) dy = AUTO_SPEED;
+			if (dx || dy) this.scrollBy(dx, dy);
+			const hit = this._hitTestBody(
+				clamp(lx, this.rowHeaderWidth, bodyRight - 1),
+				clamp(ly, this.colHeaderHeight, bodyBottom - 1)
+			);
+			if (hit) {
+				this.selection.resizeTo(hit.row, hit.col);
+				this.selection.cursorRow = hit.row;
+				this.selection.cursorCol = hit.col;
+			}
+		};
+
+		this._autoScrollTimer = setInterval(autoScroll, 50);
+
+		const move = (ev) => {
+			lastClientX = ev.clientX;
+			lastClientY = ev.clientY;
+			const rect = this.canvas.getBoundingClientRect();
+			const lx = ev.clientX - rect.left;
+			const ly = ev.clientY - rect.top;
+			const bodyRight = this.rowHeaderWidth + this.bodyW;
+			const bodyBottom = this.colHeaderHeight + this.bodyH;
+			const hit = this._hitTestBody(
+				clamp(lx, this.rowHeaderWidth, bodyRight - 1),
+				clamp(ly, this.colHeaderHeight, bodyBottom - 1)
+			);
+			if (hit) {
+				this.selection.resizeTo(hit.row, hit.col);
+				this.selection.cursorRow = hit.row;
+				this.selection.cursorCol = hit.col;
+			}
+		};
+		const up = () => {
+			if (this._autoScrollTimer) { clearInterval(this._autoScrollTimer); this._autoScrollTimer = 0; }
+			this._draggingSelection = false;
+			this.canvas.releasePointerCapture(startEvent.pointerId);
+			this.canvas.removeEventListener('pointermove', move);
+			this.canvas.removeEventListener('pointerup', up);
+			this.canvas.removeEventListener('pointercancel', up);
+		};
+		this.canvas.addEventListener('pointermove', move);
+		this.canvas.addEventListener('pointerup', up);
+		this.canvas.addEventListener('pointercancel', up);
+	}
+
+	_onKeyDown(e) {
+		const sel = this.selection;
+		if (sel.cursorRow < 0) return;
+		const maxRow = this.rows.count - 1;
+		const maxCol = this.cols.count - 1;
+		if (maxRow < 0 || maxCol < 0) return;
+		const extend = e.shiftKey;
+		const jump = e.ctrlKey || e.metaKey;
+		let handled = true;
+		switch (e.key) {
+			case 'ArrowUp':
+				if (jump) sel.jumpCursor(0, sel.cursorCol, maxRow, maxCol, extend);
+				else sel.moveCursor(-1, 0, maxRow, maxCol, extend);
+				break;
+			case 'ArrowDown':
+				if (jump) sel.jumpCursor(maxRow, sel.cursorCol, maxRow, maxCol, extend);
+				else sel.moveCursor(1, 0, maxRow, maxCol, extend);
+				break;
+			case 'ArrowLeft':
+				if (jump) sel.jumpCursor(sel.cursorRow, 0, maxRow, maxCol, extend);
+				else sel.moveCursor(0, -1, maxRow, maxCol, extend);
+				break;
+			case 'ArrowRight':
+				if (jump) sel.jumpCursor(sel.cursorRow, maxCol, maxRow, maxCol, extend);
+				else sel.moveCursor(0, 1, maxRow, maxCol, extend);
+				break;
+			case 'PageUp': {
+				const pageRows = Math.max(1, Math.floor(this.bodyH / this.rowHeight) - 1);
+				sel.moveCursor(-pageRows, 0, maxRow, maxCol, extend);
+				break;
+			}
+			case 'PageDown': {
+				const pageRows = Math.max(1, Math.floor(this.bodyH / this.rowHeight) - 1);
+				sel.moveCursor(pageRows, 0, maxRow, maxCol, extend);
+				break;
+			}
+			case 'Home':
+				if (jump) sel.jumpCursor(0, 0, maxRow, maxCol, extend);
+				else sel.jumpCursor(sel.cursorRow, 0, maxRow, maxCol, extend);
+				break;
+			case 'End':
+				if (jump) sel.jumpCursor(maxRow, maxCol, maxRow, maxCol, extend);
+				else sel.jumpCursor(sel.cursorRow, maxCol, maxRow, maxCol, extend);
+				break;
+			case 'Escape':
+				sel.clear();
+				break;
+			default:
+				handled = false;
+		}
+		if (handled) {
+			e.preventDefault();
+			this._scrollToCursor();
+		}
+	}
+
+	_onCopy(e) {
+		const sel = this.selection;
+		if (sel.selections.length === 0) return;
+		e.preventDefault();
+		const last = sel.selections[sel.selections.length - 1];
+		const rMin = Math.min(last.r1, last.r2);
+		const rMax = Math.min(Math.max(last.r1, last.r2), this.rows.count - 1);
+		const cMin = Math.min(last.c1, last.c2);
+		const cMax = Math.min(Math.max(last.c1, last.c2), this.cols.count - 1);
+		const maxCells = 10000;
+		if ((rMax - rMin + 1) * (cMax - cMin + 1) > maxCells) return;
+		const lines = [];
+		for (let r = rMin; r <= rMax; r++) {
+			const cells = [];
+			for (let c = cMin; c <= cMax; c++) {
+				cells.push(stringify(this.model.data(r, c)));
+			}
+			lines.push(cells.join('\t'));
+		}
+		e.clipboardData.setData('text/plain', lines.join('\n'));
+	}
+
 	// ---- paint pipeline ----
 
 	_paint() {
@@ -347,17 +641,15 @@ export class DataGrid {
 
 	_paintFull() {
 		const ctx = this.ctx;
-		ctx.clearRect(0, 0, this.cssWidth, this.cssHeight);
+		// Fill with white base — alpha:false means clearRect would leave black.
+		ctx.fillStyle = '#ffffff';
+		ctx.fillRect(0, 0, this.cssWidth, this.cssHeight);
 
-		// Body
 		this._paintBody(0, 0, this.bodyW, this.bodyH);
-		// Column headers (above body)
+		this._paintSelections();
 		this._paintColumnHeaders(0, 0, this.bodyW, this.colHeaderHeight);
-		// Row headers (left of body)
 		this._paintRowHeaders(0, 0, this.rowHeaderWidth, this.bodyH);
-		// Top-left corner
 		this._paintCorner();
-		// Scrollbars
 		this._paintScrollbars();
 	}
 
@@ -421,7 +713,14 @@ export class DataGrid {
 			this._paintBody(Math.max(0, dx > 0 ? bw - dx : 0), 0, Math.abs(dx), bh);
 		}
 
-		// Headers move with their corresponding axis.
+		// Selection overlay: the blitted region already carries correct selection
+		// pixels from the previous frame (shifted to new positions by drawImage).
+		// Only overlay selections on the newly exposed strips to avoid alpha
+		// accumulation on the blitted area.
+		if (this.selection.selections.length > 0) {
+			this._paintSelectionsStrips(dx, dy);
+		}
+
 		if (dx !== 0) {
 			this._paintColumnHeaders(0, 0, bw, this.colHeaderHeight);
 		}
@@ -429,18 +728,92 @@ export class DataGrid {
 			this._paintRowHeaders(0, 0, this.rowHeaderWidth, bh);
 		}
 
-		// Scrollbars (cheap; redraw fully each frame for now).
+		this._paintCorner();
 		this._paintScrollbars();
+	}
+
+	_paintSelections() {
+		const sel = this.selection;
+		if (sel.selections.length === 0) return;
+		const ctx = this.ctx;
+		const bx = this.rowHeaderWidth;
+		const by = this.colHeaderHeight;
+		ctx.save();
+		ctx.beginPath();
+		ctx.rect(bx, by, this.bodyW, this.bodyH);
+		ctx.clip();
+		this._paintSelectionsInner(ctx, bx, by);
+		ctx.restore();
+	}
+
+	_paintSelectionsStrips(dx, dy) {
+		const ctx = this.ctx;
+		const bx = this.rowHeaderWidth;
+		const by = this.colHeaderHeight;
+		const bw = this.bodyW;
+		const bh = this.bodyH;
+		ctx.save();
+		ctx.beginPath();
+		if (dy !== 0) {
+			const stripY = dy > 0 ? by + bh - dy : by;
+			ctx.rect(bx, stripY, bw, Math.abs(dy));
+		}
+		if (dx !== 0) {
+			const stripX = dx > 0 ? bx + bw - dx : bx;
+			ctx.rect(stripX, by, Math.abs(dx), bh);
+		}
+		ctx.clip();
+		this._paintSelectionsInner(ctx, bx, by);
+		ctx.restore();
+	}
+
+	_paintSelectionsInner(ctx, bx, by) {
+		const sel = this.selection;
+		for (const s of sel.selections) {
+			const rMin = Math.min(s.r1, s.r2);
+			const rMax = Math.max(s.r1, s.r2);
+			const cMin = Math.min(s.c1, s.c2);
+			const cMax = Math.max(s.c1, s.c2);
+			const effRMax = Math.min(rMax, this.rows.count - 1);
+			const effCMax = Math.min(cMax, this.cols.count - 1);
+			if (effRMax < rMin || effCMax < cMin) continue;
+			const x1 = bx + this.cols.offsetOf(cMin) - this.scrollX;
+			const y1 = by + this.rows.offsetOf(rMin) - this.scrollY;
+			const x2 = bx + this.cols.offsetOf(effCMax + 1) - this.scrollX;
+			const y2 = by + this.rows.offsetOf(effRMax + 1) - this.scrollY;
+			ctx.fillStyle = this._selStyle.fill;
+			ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
+			ctx.strokeStyle = this._selStyle.border;
+			ctx.lineWidth = 1;
+			ctx.strokeRect(
+				Math.floor(x1) + 0.5, Math.floor(y1) + 0.5,
+				Math.floor(x2 - x1), Math.floor(y2 - y1)
+			);
+		}
+		if (sel.cursorRow >= 0 && sel.cursorCol >= 0 &&
+			sel.cursorRow < this.rows.count && sel.cursorCol < this.cols.count) {
+			const cx = bx + this.cols.offsetOf(sel.cursorCol) - this.scrollX;
+			const cy = by + this.rows.offsetOf(sel.cursorRow) - this.scrollY;
+			const cw = this.cols.sizeOf(sel.cursorCol);
+			const ch = this.rows.sizeOf(sel.cursorRow);
+			ctx.strokeStyle = this._selStyle.cursorBorder;
+			ctx.lineWidth = 2;
+			ctx.strokeRect(cx + 1, cy + 1, cw - 2, ch - 2);
+		}
 	}
 
 	_paintBody(rx, ry, rw, rh) {
 		const ctx = this.ctx;
 		const bx = this.rowHeaderWidth;
 		const by = this.colHeaderHeight;
+		// Pre-compute body-origin corners (used in multiple spots below).
+		const bodyX  = bx + rx;    // left edge of the paint rect in canvas coords
+		const bodyY  = by + ry;    // top edge of the paint rect in canvas coords
+		const bodyX2 = bodyX + rw; // right edge (for grid-line lineTo)
 
 		ctx.save();
 		ctx.beginPath();
-		ctx.rect(bx + rx, by + ry, rw, rh);
+		ctx.rect(bodyX, bodyY, rw, rh);
 		ctx.clip();
 
 		const x0 = this.scrollX + rx;
@@ -454,74 +827,77 @@ export class DataGrid {
 		const nRows = r1 - r0 + 1;
 		const nCols = c1 - c0 + 1;
 
-		// Pre-compute offsets and sizes for all visible rows/cols.
-		const rowYs = new Float64Array(nRows + 1);
-		const rowHs = new Float64Array(nRows);
-		for (let i = 0; i <= nRows; i++) {
-			rowYs[i] = by + this.rows.offsetOf(r0 + i) - this.scrollY;
-		}
-		for (let i = 0; i < nRows; i++) {
-			rowHs[i] = rowYs[i + 1] - rowYs[i];
-		}
-		const colXs = new Float64Array(nCols + 1);
-		const colWs = new Float64Array(nCols);
-		for (let i = 0; i <= nCols; i++) {
-			colXs[i] = bx + this.cols.offsetOf(c0 + i) - this.scrollX;
-		}
-		for (let i = 0; i < nCols; i++) {
-			colWs[i] = colXs[i + 1] - colXs[i];
-		}
+		// Pre-compute floored screen positions of all visible row/col boundaries.
+		// Uses module-level scratch arrays (no per-call allocation).
+		// fillScreenPositions() fast path: one Math.floor + N integer additions
+		// instead of N+1 function calls + multiplications.
+		const rowYs = _scratchRowYs;
+		const rowHs = _scratchRowHs;
+		const colXs = _scratchColXs;
+		const colWs = _scratchColWs;
+		this.rows.fillScreenPositions(r0, nRows, by - this.scrollY, rowYs);
+		this.cols.fillScreenPositions(c0, nCols, bx - this.scrollX, colXs);
+		for (let i = 0; i < nRows; i++) rowHs[i] = rowYs[i + 1] - rowYs[i];
+		for (let i = 0; i < nCols; i++) colWs[i] = colXs[i + 1] - colXs[i];
 
 		// Background fill.
 		ctx.fillStyle = this._stripe.even;
-		ctx.fillRect(bx + rx, by + ry, rw, rh);
+		ctx.fillRect(bodyX, bodyY, rw, rh);
 
 		if (this._stripe.odd !== this._stripe.even) {
 			ctx.fillStyle = this._stripe.odd;
-			for (let i = 0; i < nRows; i++) {
-				if (((r0 + i) & 1) !== 1) continue;
-				ctx.fillRect(bx + rx, rowYs[i], rw, rowHs[i]);
+			// Step by 2 instead of branching every row — cuts loop iterations in half.
+			const startOdd = (r0 & 1) === 0 ? 1 : 0; // first i where r0+i is odd
+			for (let i = startOdd; i < nRows; i += 2) {
+				ctx.fillRect(bodyX, rowYs[i], rw, rowHs[i]);
 			}
 		}
 
 		// Cells.
-		ctx.font = BODY_FONT;
-		ctx.textBaseline = 'middle';
-		ctx.textAlign = 'left';
-		ctx.fillStyle = '#000';
 		const renderer = this.renderer;
-
-		for (let ri = 0; ri < nRows; ri++) {
-			const yy = rowYs[ri];
-			const rh2 = rowHs[ri];
-			const row = r0 + ri;
-			for (let ci = 0; ci < nCols; ci++) {
-				const xx = colXs[ci];
-				const cw = colWs[ci];
-				const col = c0 + ci;
-				if (renderer) {
-					renderer.paint(ctx, this.model, row, col, xx, yy, cw, rh2);
-				} else {
-					const v = this.model.data(row, col);
-					ctx.fillStyle = '#000';
-					ctx.fillText(stringify(v), xx + 4, yy + rh2 / 2, cw - 8);
+		if (renderer) {
+			// TextRenderer manages its own ctx state via _cached* properties.
+			// Reset the cache sentinels so the renderer re-applies state after
+			// the stripe fillRect calls above (which may change fillStyle).
+			ctx._cachedFont = null;
+			ctx._cachedBaseline = null;
+			ctx._cachedAlign = null;
+			for (let ri = 0; ri < nRows; ri++) {
+				const yy = rowYs[ri];
+				const rh2 = rowHs[ri];
+				for (let ci = 0; ci < nCols; ci++) {
+					renderer.paint(ctx, this.model, r0 + ri, c0 + ci, colXs[ci], yy, colWs[ci], rh2);
+				}
+			}
+		} else {
+			ctx.font = BODY_FONT;
+			ctx.textBaseline = 'middle';
+			ctx.textAlign = 'left';
+			ctx.fillStyle = '#000'; // set once before loop — no-renderer path is monochrome
+			for (let ri = 0; ri < nRows; ri++) {
+				const yy = rowYs[ri];
+				const rh2 = rowHs[ri];
+				for (let ci = 0; ci < nCols; ci++) {
+					const v = this.model.data(r0 + ri, c0 + ci);
+					ctx.fillText(stringify(v), colXs[ci] + 4, yy + rh2 / 2, colWs[ci] - 8);
 				}
 			}
 		}
 
-		// Grid lines.
+		// Grid lines. rowYs/colXs are already Math.floor()'d; just add 0.5 for
+		// crisp 1px strokes on integer-pixel boundaries.
 		ctx.strokeStyle = '#d0d0d0';
 		ctx.lineWidth = 1;
 		ctx.beginPath();
 		for (let i = 0; i <= nRows; i++) {
-			const yy = Math.floor(rowYs[i]) + 0.5;
-			ctx.moveTo(bx + rx, yy);
-			ctx.lineTo(bx + rx + rw, yy);
+			const yy = rowYs[i] + 0.5;
+			ctx.moveTo(bodyX, yy);
+			ctx.lineTo(bodyX2, yy);
 		}
 		for (let i = 0; i <= nCols; i++) {
-			const xx = Math.floor(colXs[i]) + 0.5;
-			ctx.moveTo(xx, by + ry);
-			ctx.lineTo(xx, by + ry + rh);
+			const xx = colXs[i] + 0.5;
+			ctx.moveTo(xx, bodyY);
+			ctx.lineTo(xx, bodyY + rh);
 		}
 		ctx.stroke();
 
@@ -544,18 +920,20 @@ export class DataGrid {
 		const x1 = x0 + rw;
 		const c0 = clampInt(this.cols.indexOf(x0), 0, this.cols.count - 1);
 		const c1 = clampInt(this.cols.indexOf(x1 - 0.0001), 0, this.cols.count - 1);
+		const nCH = c1 - c0;
+		// +1 extra boundary position so the grid-lines loop has c1+1's offset.
+		this.cols.fillScreenPositions(c0, nCH + 1, bx - this.scrollX, _scratchColXs);
 
 		ctx.font = HEADER_FONT;
 		ctx.textBaseline = 'middle';
 		ctx.textAlign = 'center';
-		ctx.fillStyle = '#000';
+		ctx.fillStyle = '#000'; // constant for all header cells; set once before loops
 		for (let hr = 0; hr < hrc; hr++) {
 			const yy = hr * hrh;
-			for (let c = c0; c <= c1; c++) {
-				const xx = bx + this.cols.offsetOf(c) - this.scrollX;
-				const cw = this.cols.sizeOf(c);
-				ctx.fillStyle = '#000';
-				ctx.fillText(this.model.columnHeaderData(hr, c), xx + cw / 2, yy + hrh / 2, cw - 6);
+			for (let ci = 0; ci <= nCH; ci++) {
+				const xx = _scratchColXs[ci];
+				const cw = _scratchColXs[ci + 1] - _scratchColXs[ci];
+				ctx.fillText(this.model.columnHeaderData(hr, c0 + ci), xx + cw / 2, yy + hrh / 2, cw - 6);
 			}
 		}
 
@@ -567,8 +945,9 @@ export class DataGrid {
 			ctx.moveTo(bx + rx, yy);
 			ctx.lineTo(bx + rx + rw, yy);
 		}
-		for (let c = c0; c <= c1 + 1; c++) {
-			const xx = Math.floor(bx + this.cols.offsetOf(c) - this.scrollX) + 0.5;
+		// _scratchColXs[0..nCH+1] covers c0..c1+1 (already floored).
+		for (let ci = 0; ci <= nCH + 1; ci++) {
+			const xx = _scratchColXs[ci] + 0.5;
 			ctx.moveTo(xx, 0);
 			ctx.lineTo(xx, rh);
 		}
@@ -599,18 +978,21 @@ export class DataGrid {
 		const y1 = y0 + rh;
 		const r0 = clampInt(this.rows.indexOf(y0), 0, this.rows.count - 1);
 		const r1 = clampInt(this.rows.indexOf(y1 - 0.0001), 0, this.rows.count - 1);
+		const nRH = r1 - r0;
+		// +1 extra boundary position so the grid-lines loop has r1+1's offset.
+		this.rows.fillScreenPositions(r0, nRH + 1, by - this.scrollY, _scratchRowYs);
 
 		ctx.font = HEADER_FONT;
 		ctx.textBaseline = 'middle';
-		ctx.fillStyle = '#000';
-		for (let r = r0; r <= r1; r++) {
-			const yy = by + this.rows.offsetOf(r) - this.scrollY;
-			const rh2 = this.rows.sizeOf(r);
+		ctx.fillStyle = '#000'; // constant for all header cells; set once before loops
+		for (let ri = 0; ri <= nRH; ri++) {
+			const r = r0 + ri;
+			const yy = _scratchRowYs[ri];
+			const rh2 = _scratchRowYs[ri + 1] - _scratchRowYs[ri];
 			for (let hc = 0; hc < hcc; hc++) {
 				const xx = hc * hcw;
 				ctx.textAlign = hc === hcc - 1 ? 'right' : 'center';
 				const xAnchor = hc === hcc - 1 ? xx + hcw - 6 : xx + hcw / 2;
-				ctx.fillStyle = '#000';
 				ctx.fillText(this.model.rowHeaderData(r, hc), xAnchor, yy + rh2 / 2, hcw - 8);
 			}
 		}
@@ -623,8 +1005,9 @@ export class DataGrid {
 			ctx.moveTo(xx, by + ry);
 			ctx.lineTo(xx, by + ry + rh);
 		}
-		for (let r = r0; r <= r1 + 1; r++) {
-			const yy = Math.floor(by + this.rows.offsetOf(r) - this.scrollY) + 0.5;
+		// _scratchRowYs[0..nRH+1] already covers r0..r1+1 (already floored).
+		for (let ri = 0; ri <= nRH + 1; ri++) {
+			const yy = _scratchRowYs[ri] + 0.5;
 			ctx.moveTo(0, yy);
 			ctx.lineTo(rw, yy);
 		}

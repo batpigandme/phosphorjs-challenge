@@ -20,18 +20,18 @@ export function resizeCanvas(canvas, cssWidth, cssHeight) {
 	const dpr = window.devicePixelRatio || 1;
 	const needW = Math.max(1, Math.round(cssWidth * dpr));
 	const needH = Math.max(1, Math.round(cssHeight * dpr));
-	canvas.style.width = cssWidth + 'px';
-	canvas.style.height = cssHeight + 'px';
 	const curW = canvas.width;
 	const curH = canvas.height;
-	if (needW <= curW && needH <= curH &&
-		needW > curW - GRANULARITY && needH > curH - GRANULARITY) {
+	// Always set backing store to exact size — the browser stretches the full
+	// backing store into the CSS display rect, so over-allocating causes black
+	// bands at the margins.
+	canvas.style.width = cssWidth + 'px';
+	canvas.style.height = cssHeight + 'px';
+	if (needW === curW && needH === curH) {
 		return false;
 	}
-	const allocW = (Math.ceil(needW / GRANULARITY) + 1) * GRANULARITY;
-	const allocH = (Math.ceil(needH / GRANULARITY) + 1) * GRANULARITY;
-	canvas.width = allocW;
-	canvas.height = allocH;
+	canvas.width = needW;
+	canvas.height = needH;
 	return true;
 }
 

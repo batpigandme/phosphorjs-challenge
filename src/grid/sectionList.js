@@ -67,11 +67,15 @@ export class SectionList {
 			if (keys[mid] < i) lo = mid + 1;
 			else hi = mid;
 		}
-		// Indices [0, lo) of overrides are before section i.
-		let extra = 0;
-		for (let k = 0; k < lo; k++) {
-			extra += /** @type {number} */ (this._overrides.get(keys[k])) - this.defaultSize;
-		}
+		// O(1): read cumulative extra-delta directly from _sortedOffsets instead
+		// of a linear scan over the preceding overrides. _sortedOffsets[lo] stores
+		// the offset of override keys[lo] in the original uniform grid PLUS all
+		// prior-override deltas, so:
+		//   Σ(override_k − default, k < lo) = _sortedOffsets[lo] − keys[lo]*defaultSize
+		// When lo === keys.length (all overrides precede i): use the total _delta.
+		const extra = lo < keys.length
+			? this._sortedOffsets[lo] - keys[lo] * this.defaultSize
+			: this._delta;
 		return i * this.defaultSize + extra;
 	}
 
@@ -117,6 +121,37 @@ export class SectionList {
 		const offsetAtAfter = sectionStart + sectionSize;
 		const j = Math.floor((px - offsetAtAfter) / this.defaultSize);
 		return after + j;
+	}
+
+	/**
+	 * Fill `dest[0..n]` (n+1 entries) with the floored screen position of each
+	 * section boundary: `dest[i] = Math.floor(base + offsetOf(start + i))`.
+	 *
+	 * Fast path for uniform sections (no overrides): computes one `Math.floor`
+	 * and fills with additions, avoiding N+1 function calls and multiplications.
+	 * Falls back to per-call `offsetOf` when overrides are present.
+	 *
+	 * @param {number} start  First section index.
+	 * @param {number} n      Number of sections (fills n+1 boundary positions).
+	 * @param {number} base   Pixel origin: `headerOffset - scrollOffset`.
+	 * @param {Float64Array} dest  Pre-allocated output buffer (length >= n+1).
+	 */
+	fillScreenPositions(start, n, base, dest) {
+		const d = this.defaultSize;
+		// Fast path requires: no overrides AND integer defaultSize.
+		// The identity Math.floor(A + k·d) = Math.floor(A) + k·d holds only when
+		// d and k are both integers. Our row heights (20, 24, 28 px) and column
+		// widths (60–132 px) are all integers, so (d | 0) === d is true for every
+		// actual grid. The check is the guard for correctness if non-integer sizes
+		// are ever introduced.
+		if (this._overrides.size === 0 && (d | 0) === d) {
+			const origin = Math.floor(base + start * d);
+			for (let i = 0; i <= n; i++) dest[i] = origin + i * d;
+		} else {
+			for (let i = 0; i <= n; i++) {
+				dest[i] = Math.floor(base + this.offsetOf(start + i));
+			}
+		}
 	}
 
 	/** Override the size of section `i`. Pass -1 to clear. */

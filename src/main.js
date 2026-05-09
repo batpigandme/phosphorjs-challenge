@@ -32,21 +32,21 @@ function makeGridHost(model, opts) {
 }
 
 const trillionHost = makeGridHost(new LargeDataModel(), {
-	theme: 'blue'
+	theme: 'blue',
+	selectionMode: 'cell'
 });
 
 const streamingHost = makeGridHost(new StreamingDataModel(40, 50), {
 	theme: 'brown',
-	colWidth: 80,
-	renderer: new TextRenderer({
-		align: 'right',
-		format: (_r, _c, v) => v.toFixed(2)
-	})
+	colWidth: 96,
+	selectionMode: 'column'
 });
 
 const ticks1Host = makeGridHost(new RandomDataModel(15, 10), {
 	theme: 'blue',
 	colWidth: 80,
+	selectionMode: 'cell',
+	stretchLastColumn: true,
 	renderer: new TextRenderer({
 		align: 'right',
 		format: (_r, _c, v) => v.toFixed(2),
@@ -57,6 +57,12 @@ const ticks1Host = makeGridHost(new RandomDataModel(15, 10), {
 const ticks2Host = makeGridHost(new RandomDataModel(80, 80, 7777), {
 	theme: null,
 	colWidth: 60,
+	selectionMode: 'cell',
+	selectionStyle: {
+		fill: 'rgba(255,255,255,0.2)',
+		border: 'rgba(255,255,255,0.8)',
+		cursorBorder: '#ffffff'
+	},
 	renderer: new TextRenderer({
 		align: 'center',
 		format: (_r, _c, v) => v.toFixed(2),
@@ -69,7 +75,11 @@ const jsonHost = makeGridHost(new JSONModel(), {
 	theme: 'green',
 	rowHeight: 28,
 	colWidth: 132,
-	colHeaderHeight: 28
+	colHeaderHeight: 28,
+	selectionMode: 'row',
+	renderer: new TextRenderer({
+		align: 'right'
+	})
 });
 
 const tabTrillion = makeTab('Trillion Rows/Cols', trillionHost);
@@ -88,7 +98,7 @@ const layout = makeSplit(
 		),
 		makeSplit(
 			'vertical',
-			[makeTabs([tabStreaming]), makeTabs([tabTicks2]), makeTabs([tabJSON])],
+			[makeTabs([tabStreaming]), makeTabs([tabJSON]), makeTabs([tabTicks2])],
 			[0.34, 0.33, 0.33]
 		)
 	],

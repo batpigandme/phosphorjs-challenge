@@ -33,10 +33,13 @@ export class RandomDataModel extends DataModel {
 		return this._buf[row * this._cols + col];
 	}
 	columnHeaderData(row, col) {
-		return String(col);
+		return 'C: ' + row + ', ' + col;
 	}
 	rowHeaderData(row, col) {
-		return String(row);
+		return 'R: ' + row + ', ' + col;
+	}
+	cornerHeaderData(row, col) {
+		return 'N: ' + row + ', ' + col;
 	}
 	_tick() {
 		const n = this._buf.length;

@@ -14,7 +14,7 @@
 import { makeTabs, walk, removeTab, dropTab, findTabsLeaf } from './LayoutNode.js';
 import { hitTestDrop } from './hitTest.js';
 
-const SPLIT_HANDLE_PX = 6;
+const SPLIT_HANDLE_PX = 4;
 const DRAG_THRESHOLD = 4;
 
 export class DockPanel {
@@ -126,6 +126,13 @@ export class DockPanel {
 				this._closeTab(tab.id);
 			});
 			tabEl.appendChild(close);
+			tabEl.addEventListener('pointerdown', (e) => {
+				if (e.button === 1) {
+					e.preventDefault();
+					e.stopPropagation();
+					this._closeTab(tab.id);
+				}
+			});
 			this._wireTab(tabEl, node, i);
 			bar.appendChild(tabEl);
 			tab.host.classList.toggle('active', i === node.activeIndex);
@@ -215,7 +222,7 @@ export class DockPanel {
 		const startY = downEvent.clientY;
 		const target = downEvent.currentTarget;
 		target.setPointerCapture(downEvent.pointerId);
-		this._drag = { tab, sourceLeaf, started: false, target };
+		this._drag = { tab, sourceLeaf, started: false, target, reordering: false };
 		const move = (e) => {
 			if (!this._drag) return;
 			if (!this._drag.started) {
@@ -223,16 +230,57 @@ export class DockPanel {
 				const dy = e.clientY - startY;
 				if (dx * dx + dy * dy < DRAG_THRESHOLD * DRAG_THRESHOLD) return;
 				this._drag.started = true;
-				this._showDragUI(tab.title);
+				// Check if pointer is still within the tab bar — start reorder mode.
+				const bar = sourceLeaf._bar;
+				if (bar) {
+					const barRect = bar.getBoundingClientRect();
+					if (e.clientY >= barRect.top && e.clientY <= barRect.bottom) {
+						this._drag.reordering = true;
+					}
+				}
+				if (!this._drag.reordering) {
+					this._showDragUI(tab.title);
+				}
 			}
-			this._updateDragUI(e.clientX, e.clientY);
+			if (this._drag.reordering) {
+				const bar = sourceLeaf._bar;
+				if (!bar) return;
+				const barRect = bar.getBoundingClientRect();
+				if (e.clientY < barRect.top - 30 || e.clientY > barRect.bottom + 30) {
+					// Left the bar zone → switch to full drag.
+					this._drag.reordering = false;
+					this._showDragUI(tab.title);
+					this._updateDragUI(e.clientX, e.clientY);
+					return;
+				}
+				// Reorder within bar.
+				const tabs = sourceLeaf.tabs;
+				const currentIdx = tabs.indexOf(tab);
+				let newIdx = tabs.length - 1;
+				for (let i = 0; i < bar.children.length; i++) {
+					const child = bar.children[i];
+					const cr = child.getBoundingClientRect();
+					if (e.clientX < cr.left + cr.width / 2) {
+						newIdx = i;
+						break;
+					}
+				}
+				if (newIdx !== currentIdx) {
+					tabs.splice(currentIdx, 1);
+					tabs.splice(newIdx, 0, tab);
+					sourceLeaf.activeIndex = newIdx;
+					this._render();
+				}
+			} else {
+				this._updateDragUI(e.clientX, e.clientY);
+			}
 		};
 		const up = (e) => {
 			target.releasePointerCapture(downEvent.pointerId);
 			target.removeEventListener('pointermove', move);
 			target.removeEventListener('pointerup', up);
 			target.removeEventListener('pointercancel', up);
-			if (this._drag && this._drag.started) {
+			if (this._drag && this._drag.started && !this._drag.reordering) {
 				this._commitDrop(e.clientX, e.clientY);
 			}
 			this._hideDragUI();
@@ -299,27 +347,32 @@ export class DockPanel {
 		if (!target) return;
 		const tab = this._drag.tab;
 		const sourceLeaf = this._drag.sourceLeaf;
-		// No-op: dropping on the same single-tab leaf.
 		if (target.leaf === sourceLeaf && target.mode === 'tab-after' && sourceLeaf.tabs.length === 1) {
 			return;
 		}
-		// Remove from source first.
 		this.root = removeTab(this.root, tab.id);
-		// Re-target after removal: the leaf reference may have been collapsed.
-		// findTabsLeaf works because leaves are still object-identity-stable
-		// unless they were emptied/removed — and `target.leaf` is the *destination*,
-		// which hasn't been emptied.
-		// (Edge case: source == target leaf. After removal the target may be empty.
-		// In that case treat as if dropped on the (former) target's parent area.)
-		// For robustness in v1: if target leaf is no longer in the tree, no-op.
+
+		if (target.rootEdge) {
+			const newLeaf = makeTabs([tab]);
+			const dir = (target.mode === 'split-left' || target.mode === 'split-right')
+				? 'horizontal' : 'vertical';
+			const before = target.mode === 'split-left' || target.mode === 'split-top';
+			this.root = {
+				kind: 'split', dir,
+				children: before ? [newLeaf, this.root] : [this.root, newLeaf],
+				sizes: [0.75, 0.25], _el: null
+			};
+			if (before) this.root.sizes = [0.25, 0.75];
+			this._render();
+			return;
+		}
+
 		let targetStillExists = false;
 		walk(this.root, (n) => {
 			if (n === target.leaf) targetStillExists = true;
 		});
 		if (!targetStillExists) {
-			// Re-add to source (or fall back to root).
 			if (sourceLeaf.tabs.length === 0 || sourceLeaf._el === null) {
-				// Source was collapsed too — make the dropped tab the new root.
 				this.root = makeTabs([tab]);
 			} else {
 				sourceLeaf.tabs.push(tab);

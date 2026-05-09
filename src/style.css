@@ -1,14 +1,16 @@
 :root {
-	--bg: #fafafa;
+	--bg: #1b1b1b;
 	--bg-panel: #ffffff;
-	--border: #c0c0c0;
+	--border: #404040;
 	--border-strong: #808080;
 	--text: #000000;
 	--text-muted: #555555;
 	--accent: #2962ff;
-	--tab-bg: #e6e6e6;
-	--tab-bg-active: #ffffff;
-	--tab-bg-hover: #efefef;
+	--tab-bg: #323232;
+	--tab-bg-active: #3c3c3c;
+	--tab-bg-hover: #3a3a3a;
+	--tab-text: #c8c8c8;
+	--tab-text-active: #ffffff;
 	--header-bg: #f0f0f0;
 	--grid-line: #d0d0d0;
 	--scrollbar-thumb: #b0b0b0;
@@ -58,7 +60,7 @@ body {
 	inset: 0;
 	overflow: hidden;
 	display: flex;
-	background: #ddd;
+	background: var(--bg);
 }
 
 .dock-split {
@@ -76,8 +78,8 @@ body {
 }
 
 .dock-split-handle {
-	flex: 0 0 6px;
-	background: var(--border);
+	flex: 0 0 4px;
+	background: var(--bg);
 	position: relative;
 	z-index: 2;
 	user-select: none;
@@ -100,18 +102,18 @@ body {
 	display: flex;
 	flex-direction: column;
 	background: var(--bg-panel);
-	border: 1px solid var(--border);
+	border: none;
 	min-width: 0;
 	min-height: 0;
 }
 
 .dock-tabbar {
-	flex: 0 0 28px;
+	flex: 0 0 24px;
 	display: flex;
 	flex-direction: row;
 	align-items: stretch;
-	background: var(--header-bg);
-	border-bottom: 1px solid var(--border);
+	background: var(--tab-bg);
+	border-bottom: none;
 	overflow: hidden;
 	user-select: none;
 }
@@ -123,7 +125,8 @@ body {
 	padding: 0 6px 0 14px;
 	font-size: 12px;
 	background: var(--tab-bg);
-	border-right: 1px solid var(--border);
+	border-right: 1px solid rgba(255,255,255,0.08);
+	color: var(--tab-text);
 	cursor: pointer;
 	white-space: nowrap;
 	transition: background-color 80ms ease;
@@ -142,7 +145,7 @@ body {
 	font-size: 14px;
 	line-height: 1;
 	border-radius: 3px;
-	color: var(--text-muted);
+	color: rgba(255,255,255,0.4);
 	opacity: 0;
 	transition: opacity 80ms ease, background-color 80ms ease;
 }
@@ -152,8 +155,8 @@ body {
 }
 
 .dock-tab-close:hover {
-	background: rgba(0, 0, 0, 0.1);
-	color: var(--text);
+	background: rgba(255, 255, 255, 0.15);
+	color: #fff;
 }
 
 .dock-tab:hover {
@@ -162,6 +165,7 @@ body {
 
 .dock-tab.active {
 	background: var(--tab-bg-active);
+	color: var(--tab-text-active);
 	font-weight: 500;
 }
 
@@ -218,10 +222,11 @@ body {
 	pointer-events: none;
 	z-index: 101;
 	background: var(--tab-bg-active);
-	border: 1px solid var(--border-strong);
+	border: 1px solid rgba(255,255,255,0.2);
+	color: var(--tab-text-active);
 	padding: 4px 10px;
 	font-size: 12px;
-	box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+	box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
 	opacity: 0.9;
 }
 

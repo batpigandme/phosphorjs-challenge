@@ -742,9 +742,14 @@ export class DataGrid {
 		// Shift the line buffer by the same amount. The non-exposed region of
 		// pre-rendered grid lines is now at its correct post-scroll position.
 		// _paintBody below will clearRect + redraw lines only for the exposed strip.
+		// 'copy' compositing is required here: the line buffer is alpha:true, so
+		// transparent source pixels must replace (not blend over) stale grid lines
+		// in the destination — source-over would leave ghost lines from prior frames
+		// that accumulate into a solid gray wash over many scroll steps.
 		const lineCtx = this._lineCtx;
 		lineCtx.save();
 		lineCtx.setTransform(1, 0, 0, 1, 0, 0);
+		lineCtx.globalCompositeOperation = 'copy';
 		lineCtx.drawImage(this._lineBuffer, sxBack, syBack, sw, sh, ddx * dpr, ddy * dpr, sw, sh);
 		lineCtx.restore();
 		applyDpr(lineCtx);

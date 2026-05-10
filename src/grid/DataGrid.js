@@ -899,6 +899,13 @@ export class DataGrid {
 			}
 		}
 
+		// Clip to the paint rect so partially-scrolled edge columns can't
+		// bleed text into the row-header or column-header area.
+		ctx.save();
+		ctx.beginPath();
+		ctx.rect(bodyX, bodyY, rw, rh);
+		ctx.clip();
+
 		// Cells. Render column-wise (Phosphor pattern): one clip per column so
 		// renderers cannot overflow their column's width. Height is the renderer's
 		// responsibility. ctx.restore() after each column resets ctx state, so
@@ -932,6 +939,8 @@ export class DataGrid {
 				}
 			}
 		}
+
+		ctx.restore();
 
 		// Grid lines go to the separate line buffer (alpha:true) so they can be
 		// blit-shifted independently on scroll — one drawImage memcpy + a handful

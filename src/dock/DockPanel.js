@@ -16,6 +16,15 @@ import { hitTestDrop } from './hitTest.js';
 
 const SPLIT_HANDLE_PX = 4;
 const DRAG_THRESHOLD = 4;
+// A collapsed panel shows just its tab bar (24px) plus a 4px handle gap.
+// Dragging its adjacent handle past this threshold restores it.
+const COLLAPSED_SIZE_PX = 28;
+
+// Returns the flex shorthand for a split child. A size of 0 means collapsed:
+// render as fixed COLLAPSED_SIZE_PX so the tab bar remains a visible drag target.
+function childFlex(sz) {
+	return sz === 0 ? `0 0 ${COLLAPSED_SIZE_PX}px` : `${sz} 1 0`;
+}
 
 export class DockPanel {
 	/**
@@ -84,9 +93,8 @@ export class DockPanel {
 				el.appendChild(handle);
 			}
 			const childEl = this._renderNode(node.children[i]);
-			const frac = node.sizes[i] || 1 / node.children.length;
-			const totalHandle = (node.children.length - 1) * SPLIT_HANDLE_PX;
-			childEl.style.flex = `${frac} 1 0`;
+			const frac = node.sizes[i] !== undefined ? node.sizes[i] : 1 / node.children.length;
+			childEl.style.flex = childFlex(frac);
 			childEl.style.minWidth = '0';
 			childEl.style.minHeight = '0';
 			el.appendChild(childEl);
@@ -178,31 +186,29 @@ export class DockPanel {
 			const splitRect = splitEl.getBoundingClientRect();
 			const totalPx = splitNode.dir === 'horizontal' ? splitRect.width : splitRect.height;
 			const startSizes = splitNode.sizes.slice();
+			// Snap threshold: if a child would end up below this pixel size,
+			// collapse it to 0 (shows only the tab bar as a restore handle).
+			const snapFrac = COLLAPSED_SIZE_PX / totalPx;
 			const move = (ev) => {
 				const dpx = splitNode.dir === 'horizontal' ? ev.clientX - startX : ev.clientY - startY;
 				const dfrac = dpx / totalPx;
 				let prev = startSizes[indexInSplit - 1] + dfrac;
 				let next = startSizes[indexInSplit] - dfrac;
-				const min = 0.05;
-				if (prev < min) {
-					next -= min - prev;
-					prev = min;
-				}
-				if (next < min) {
-					prev -= min - next;
-					next = min;
-				}
+				// Snap to collapsed (0) if dragged past the snap threshold.
+				if (prev < snapFrac) prev = 0;
+				if (next < snapFrac) next = 0;
+				// Never collapse both sides simultaneously.
+				if (prev === 0 && next === 0) return;
 				splitNode.sizes[indexInSplit - 1] = prev;
 				splitNode.sizes[indexInSplit] = next;
-				// Apply flex grow without rebuilding.
+				// Apply flex without a full DOM rebuild.
 				const childEls = [];
-				let ix = 0;
 				for (let i = 0; i < splitEl.children.length; i++) {
 					const c = splitEl.children[i];
 					if (!c.classList.contains('dock-split-handle')) childEls.push(c);
 				}
 				for (let i = 0; i < childEls.length; i++) {
-					childEls[i].style.flex = `${splitNode.sizes[i]} 1 0`;
+					childEls[i].style.flex = childFlex(splitNode.sizes[i]);
 				}
 			};
 			const up = (ev) => {
@@ -385,6 +391,11 @@ export class DockPanel {
 	}
 
 	_closeTab(tabId) {
+		const leaf = findTabsLeaf(this.root, tabId);
+		if (leaf) {
+			const tab = leaf.tabs.find(t => t.id === tabId);
+			if (tab && tab.dispose) tab.dispose();
+		}
 		this.root = removeTab(this.root, tabId);
 		if (!this.root) {
 			this.root = makeTabs([]);

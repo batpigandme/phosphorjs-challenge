@@ -13,6 +13,7 @@
 // computed the cell rect; the renderer just paints into it.
 
 export class CellRenderer {
+	resetCache() {}
 	/**
 	 * @param {CanvasRenderingContext2D} ctx
 	 * @param {import('../data/DataModel.js').DataModel} model
@@ -59,6 +60,15 @@ export class TextRenderer extends CellRenderer {
 		this._formatIsFn = typeof this.format === 'function';
 		this._colorIsFn = typeof this.color === 'function';
 		this._bgIsFn = typeof this.bg === 'function';
+		this._lastFont = null;
+		this._lastBaseline = null;
+		this._lastAlign = null;
+	}
+
+	resetCache() {
+		this._lastFont = null;
+		this._lastBaseline = null;
+		this._lastAlign = null;
 	}
 
 	paint(ctx, model, row, col, x, y, w, h) {
@@ -77,17 +87,17 @@ export class TextRenderer extends CellRenderer {
 					: '' + v;
 		const color = this._colorIsFn ? this.color(row, col, v) : this.color;
 		ctx.fillStyle = color;
-		if (ctx._cachedFont !== this.font) {
+		if (this._lastFont !== this.font) {
 			ctx.font = this.font;
-			ctx._cachedFont = this.font;
+			this._lastFont = this.font;
 		}
-		if (ctx._cachedBaseline !== 'middle') {
+		if (this._lastBaseline !== 'middle') {
 			ctx.textBaseline = 'middle';
-			ctx._cachedBaseline = 'middle';
+			this._lastBaseline = 'middle';
 		}
-		if (ctx._cachedAlign !== this.align) {
+		if (this._lastAlign !== this.align) {
 			ctx.textAlign = this.align;
-			ctx._cachedAlign = this.align;
+			this._lastAlign = this.align;
 		}
 		const pad = this.padding;
 		let tx;

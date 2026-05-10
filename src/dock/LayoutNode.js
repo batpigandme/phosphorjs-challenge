@@ -18,11 +18,12 @@
 
 let _tabIdCounter = 0;
 
-export function makeTab(title, host) {
+export function makeTab(title, host, dispose) {
 	return {
 		id: 't' + ++_tabIdCounter,
 		title,
-		host
+		host,
+		dispose: dispose || null
 	};
 }
 

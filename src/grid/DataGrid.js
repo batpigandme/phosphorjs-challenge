@@ -13,14 +13,15 @@
 //   +-------------------------------------+
 //
 // Painting strategy:
-//   * Single canvas, single 2d ctx. Backing store sized for devicePixelRatio.
+//   * Two offscreen buffers: _buffer (cells, alpha:false) and _lineBuffer (grid
+//     lines only, alpha:true). _present() composites both onto the visible canvas.
 //   * On invalidate, the rAF scheduler calls `_paint` once per frame.
 //   * `_paint` chooses between three modes:
 //       - 'full': repaint every region (resize, model reset, theme change).
-//       - 'scroll': scroll-blit the body (and header strips on the moving axis)
-//                   and only paint the newly-exposed strips. Used when only
-//                   scroll position changed and the delta is small enough for
-//                   the existing pixels to be reused.
+//       - 'scroll': scroll-blit BOTH the cell buffer and the line buffer, then
+//                   paint only the newly-exposed strips. One blit + 1–2 new lines
+//                   beats redrawing all N+M lines every frame (BitBlt principle:
+//                   memcpy >> rasterization).
 //       - 'cells': repaint a dirty cell rect on top of unchanged pixels.
 //
 // Trillion-row scrolling: scrollY is a Float64 in body-pixel coordinates.
@@ -114,6 +115,7 @@ export class DataGrid {
 		});
 		this._autoScrollTimer = 0;
 		this._draggingSelection = false;
+		this._resizing = false;
 
 		// Build DOM.
 		host.classList.add('grid-host');
@@ -139,6 +141,16 @@ export class DataGrid {
 		const bufferCtx = this._buffer.getContext('2d', { alpha: false });
 		if (!bufferCtx) throw new Error('2d buffer context unavailable');
 		this.ctx = bufferCtx;
+
+		// Separate offscreen canvas for body grid lines only (alpha:true so lines
+		// composite transparently over cells). _present() blits cells then lines.
+		// On scroll-blit the line buffer shifts identically to the cell buffer —
+		// one drawImage memcpy + 1-2 new edge lines instead of redrawing all N+M
+		// lines every frame (BitBlt principle).
+		this._lineBuffer = document.createElement('canvas');
+		const lineCtx = this._lineBuffer.getContext('2d', { alpha: true });
+		if (!lineCtx) throw new Error('2d line buffer context unavailable');
+		this._lineCtx = lineCtx;
 
 		this._paint = this._paint.bind(this);
 
@@ -170,6 +182,7 @@ export class DataGrid {
 		this._ro.disconnect();
 		if (this._autoScrollTimer) clearInterval(this._autoScrollTimer);
 		this.canvas.removeEventListener('wheel', this._onWheel);
+		this.canvas.removeEventListener('pointerdown', this._onPointerDown);
 		this.canvas.removeEventListener('pointermove', this._onPointerMove);
 		this.canvas.removeEventListener('keydown', this._onKeyDown);
 		this.canvas.removeEventListener('copy', this._onCopy);
@@ -211,6 +224,7 @@ export class DataGrid {
 		// canvas (which clears it) and immediately blit. All in one task —
 		// the browser only composites the result, never the empty interim.
 		resizeCanvas(this._buffer, this.cssWidth, this.cssHeight);
+		resizeCanvas(this._lineBuffer, this.cssWidth, this.cssHeight);
 		resizeCanvas(this.canvas, this.cssWidth, this.cssHeight);
 		if (this.stretchLastColumn) this._applyStretchLastColumn();
 		this._mode = 'full';
@@ -642,6 +656,7 @@ export class DataGrid {
 		if (this.cssWidth === 0 || this.cssHeight === 0) return;
 		const ctx = this.ctx;
 		applyDpr(ctx);
+		applyDpr(this._lineCtx);
 
 		const mode = this._mode;
 		this._mode = 'cells';
@@ -658,13 +673,13 @@ export class DataGrid {
 		notePaint();
 	}
 
-	// Atomic blit of the offscreen buffer onto the visible canvas. Identity
-	// transform + backing-pixel coordinates means a straight pixel copy with
-	// no resampling.
+	// Atomic composite of cell buffer then line buffer onto the visible canvas.
+	// Two drawImage calls = two memcpy-style GPU blits; no rasterization involved.
 	_present() {
 		const fctx = this._frontCtx;
 		fctx.setTransform(1, 0, 0, 1, 0, 0);
-		fctx.drawImage(this._buffer, 0, 0);
+		fctx.drawImage(this._buffer, 0, 0);       // cells (opaque)
+		fctx.drawImage(this._lineBuffer, 0, 0);   // grid lines (transparent bg)
 	}
 
 	_paintFull() {
@@ -720,19 +735,19 @@ export class DataGrid {
 		// their new screen positions, then paint the newly-exposed strips.
 		ctx.save();
 		ctx.setTransform(1, 0, 0, 1, 0, 0);
-		ctx.drawImage(
-			this._buffer,
-			sxBack,
-			syBack,
-			sw,
-			sh,
-			ddx * dpr,
-			ddy * dpr,
-			sw,
-			sh
-		);
+		ctx.drawImage(this._buffer, sxBack, syBack, sw, sh, ddx * dpr, ddy * dpr, sw, sh);
 		ctx.restore();
 		applyDpr(ctx);
+
+		// Shift the line buffer by the same amount. The non-exposed region of
+		// pre-rendered grid lines is now at its correct post-scroll position.
+		// _paintBody below will clearRect + redraw lines only for the exposed strip.
+		const lineCtx = this._lineCtx;
+		lineCtx.save();
+		lineCtx.setTransform(1, 0, 0, 1, 0, 0);
+		lineCtx.drawImage(this._lineBuffer, sxBack, syBack, sw, sh, ddx * dpr, ddy * dpr, sw, sh);
+		lineCtx.restore();
+		applyDpr(lineCtx);
 
 		// Newly exposed body strips: the band(s) that drawImage didn't fill.
 		if (dy !== 0) {
@@ -834,17 +849,13 @@ export class DataGrid {
 
 	_paintBody(rx, ry, rw, rh) {
 		const ctx = this.ctx;
+		const lineCtx = this._lineCtx;
 		const bx = this.rowHeaderWidth;
 		const by = this.colHeaderHeight;
 		// Pre-compute body-origin corners (used in multiple spots below).
 		const bodyX  = bx + rx;    // left edge of the paint rect in canvas coords
 		const bodyY  = by + ry;    // top edge of the paint rect in canvas coords
 		const bodyX2 = bodyX + rw; // right edge (for grid-line lineTo)
-
-		ctx.save();
-		ctx.beginPath();
-		ctx.rect(bodyX, bodyY, rw, rh);
-		ctx.clip();
 
 		const x0 = this.scrollX + rx;
 		const y0 = this.scrollY + ry;
@@ -883,55 +894,59 @@ export class DataGrid {
 			}
 		}
 
-		// Cells.
+		// Cells. Render column-wise (Phosphor pattern): one clip per column so
+		// renderers cannot overflow their column's width. Height is the renderer's
+		// responsibility. ctx.restore() after each column resets ctx state, so
+		// _cached* sentinels are invalidated per-column (not per-body-paint).
 		const renderer = this.renderer;
 		if (renderer) {
-			// TextRenderer manages its own ctx state via _cached* properties.
-			// Reset the cache sentinels so the renderer re-applies state after
-			// the stripe fillRect calls above (which may change fillStyle).
-			ctx._cachedFont = null;
-			ctx._cachedBaseline = null;
-			ctx._cachedAlign = null;
-			for (let ri = 0; ri < nRows; ri++) {
-				const yy = rowYs[ri];
-				const rh2 = rowHs[ri];
-				for (let ci = 0; ci < nCols; ci++) {
-					renderer.paint(ctx, this.model, r0 + ri, c0 + ci, colXs[ci], yy, colWs[ci], rh2);
+			for (let ci = 0; ci < nCols; ci++) {
+				const xx = colXs[ci];
+				const cw = colWs[ci];
+				ctx.save();
+				ctx.beginPath();
+				ctx.rect(xx, bodyY, cw, rh);
+				ctx.clip();
+				renderer.resetCache();
+				for (let ri = 0; ri < nRows; ri++) {
+					renderer.paint(ctx, this.model, r0 + ri, c0 + ci, xx, rowYs[ri], cw, rowHs[ri]);
 				}
+				ctx.restore();
 			}
 		} else {
 			ctx.font = BODY_FONT;
 			ctx.textBaseline = 'middle';
 			ctx.textAlign = 'left';
-			ctx.fillStyle = '#000'; // set once before loop — no-renderer path is monochrome
-			for (let ri = 0; ri < nRows; ri++) {
-				const yy = rowYs[ri];
-				const rh2 = rowHs[ri];
-				for (let ci = 0; ci < nCols; ci++) {
+			ctx.fillStyle = '#000';
+			for (let ci = 0; ci < nCols; ci++) {
+				const xx = colXs[ci];
+				const cw = colWs[ci];
+				for (let ri = 0; ri < nRows; ri++) {
 					const v = this.model.data(r0 + ri, c0 + ci);
-					ctx.fillText(stringify(v), colXs[ci] + 4, yy + rh2 / 2, colWs[ci] - 8);
+					ctx.fillText(stringify(v), xx + 4, rowYs[ri] + rowHs[ri] / 2, cw - 8);
 				}
 			}
 		}
 
-		// Grid lines. rowYs/colXs are already Math.floor()'d; just add 0.5 for
-		// crisp 1px strokes on integer-pixel boundaries.
-		ctx.strokeStyle = '#d0d0d0';
-		ctx.lineWidth = 1;
-		ctx.beginPath();
+		// Grid lines go to the separate line buffer (alpha:true) so they can be
+		// blit-shifted independently on scroll — one drawImage memcpy + a handful
+		// of new edge lines, vs. redrawing all N+M lines every frame.
+		// clearRect first so stale pixels from a previous scroll position don't bleed.
+		lineCtx.clearRect(bodyX, bodyY, rw, rh);
+		lineCtx.strokeStyle = '#d0d0d0';
+		lineCtx.lineWidth = 1;
+		lineCtx.beginPath();
 		for (let i = 0; i <= nRows; i++) {
 			const yy = rowYs[i] + 0.5;
-			ctx.moveTo(bodyX, yy);
-			ctx.lineTo(bodyX2, yy);
+			lineCtx.moveTo(bodyX, yy);
+			lineCtx.lineTo(bodyX2, yy);
 		}
 		for (let i = 0; i <= nCols; i++) {
 			const xx = colXs[i] + 0.5;
-			ctx.moveTo(xx, bodyY);
-			ctx.lineTo(xx, bodyY + rh);
+			lineCtx.moveTo(xx, bodyY);
+			lineCtx.lineTo(xx, bodyY + rh);
 		}
-		ctx.stroke();
-
-		ctx.restore();
+		lineCtx.stroke();
 	}
 
 	_paintColumnHeaders(rx, _ry, rw, rh) {

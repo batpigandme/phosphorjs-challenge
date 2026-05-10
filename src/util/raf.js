@@ -16,13 +16,21 @@
 const dirty = new Set();
 let scheduled = false;
 
+const _flushBuf = new Array(16);
+let _flushLen = 0;
+
+function _collectCb(cb) {
+	_flushBuf[_flushLen++] = cb;
+}
+
 function flush() {
 	scheduled = false;
-	// Snapshot first so a callback that re-invalidates doesn't paint twice.
-	const callbacks = Array.from(dirty);
+	_flushLen = 0;
+	dirty.forEach(_collectCb);
 	dirty.clear();
-	for (let i = 0; i < callbacks.length; i++) {
-		callbacks[i]();
+	for (let i = 0; i < _flushLen; i++) {
+		_flushBuf[i]();
+		_flushBuf[i] = null;
 	}
 }
 

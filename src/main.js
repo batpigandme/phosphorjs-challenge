@@ -24,25 +24,28 @@ import { attachFPSOverlay } from './util/fps.js';
 const root = document.getElementById('root');
 root.innerHTML = '';
 
-function makeGridHost(model, opts) {
+function makeGridTab(title, model, opts) {
 	const host = document.createElement('div');
 	host.style.cssText = 'position:absolute;inset:0;';
-	new DataGrid(host, { ...opts, model });
-	return host;
+	const grid = new DataGrid(host, { ...opts, model });
+	return makeTab(title, host, () => {
+		grid.dispose();
+		if (typeof model.dispose === 'function') model.dispose();
+	});
 }
 
-const trillionHost = makeGridHost(new LargeDataModel(), {
+const tabTrillion = makeGridTab('Trillion Rows/Cols', new LargeDataModel(), {
 	theme: 'blue',
 	selectionMode: 'cell'
 });
 
-const streamingHost = makeGridHost(new StreamingDataModel(40, 50), {
+const tabStreaming = makeGridTab('Streaming Rows', new StreamingDataModel(40, 50), {
 	theme: 'brown',
 	colWidth: 96,
 	selectionMode: 'column'
 });
 
-const ticks1Host = makeGridHost(new RandomDataModel(15, 10), {
+const tabTicks1 = makeGridTab('Random Ticks 1', new RandomDataModel(15, 10), {
 	theme: 'blue',
 	colWidth: 80,
 	selectionMode: 'cell',
@@ -54,7 +57,7 @@ const ticks1Host = makeGridHost(new RandomDataModel(15, 10), {
 	})
 });
 
-const ticks2Host = makeGridHost(new RandomDataModel(80, 80, 7777), {
+const tabTicks2 = makeGridTab('Random Ticks 2', new RandomDataModel(80, 80, 7777), {
 	theme: null,
 	colWidth: 60,
 	selectionMode: 'cell',
@@ -71,7 +74,7 @@ const ticks2Host = makeGridHost(new RandomDataModel(80, 80, 7777), {
 	})
 });
 
-const jsonHost = makeGridHost(new JSONModel(), {
+const tabJSON = makeGridTab('JSON Data', new JSONModel(), {
 	theme: 'green',
 	rowHeight: 28,
 	colWidth: 132,
@@ -81,12 +84,6 @@ const jsonHost = makeGridHost(new JSONModel(), {
 		align: 'right'
 	})
 });
-
-const tabTrillion = makeTab('Trillion Rows/Cols', trillionHost);
-const tabStreaming = makeTab('Streaming Rows', streamingHost);
-const tabTicks1 = makeTab('Random Ticks 1', ticks1Host);
-const tabTicks2 = makeTab('Random Ticks 2', ticks2Host);
-const tabJSON = makeTab('JSON Data', jsonHost);
 
 const layout = makeSplit(
 	'horizontal',

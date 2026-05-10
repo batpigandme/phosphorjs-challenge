@@ -774,9 +774,10 @@ export class DataGrid {
 		if (dx !== 0) {
 			this._paintColumnHeaders(0, 0, bw, this.colHeaderHeight);
 		}
-		if (dy !== 0) {
-			this._paintRowHeaders(0, 0, this.rowHeaderWidth, bh);
-		}
+		// Always repaint row headers: row labels change on dy!=0, and on dx!=0
+		// a partially-scrolled first column can bleed text into the header area
+		// that _paintBody doesn't clip away.
+		this._paintRowHeaders(0, 0, this.rowHeaderWidth, bh);
 
 		this._paintCorner();
 		this._paintScrollbars();
@@ -899,13 +900,6 @@ export class DataGrid {
 			}
 		}
 
-		// Clip to the paint rect so partially-scrolled edge columns can't
-		// bleed text into the row-header or column-header area.
-		ctx.save();
-		ctx.beginPath();
-		ctx.rect(bodyX, bodyY, rw, rh);
-		ctx.clip();
-
 		// Cells. Render column-wise (Phosphor pattern): one clip per column so
 		// renderers cannot overflow their column's width. Height is the renderer's
 		// responsibility. ctx.restore() after each column resets ctx state, so
@@ -939,8 +933,6 @@ export class DataGrid {
 				}
 			}
 		}
-
-		ctx.restore();
 
 		// Grid lines go to the separate line buffer (alpha:true) so they can be
 		// blit-shifted independently on scroll — one drawImage memcpy + a handful

@@ -27,7 +27,26 @@ The demo reproduces the full interaction surface of the original:
   - **Random Ticks 2** -- 80x80 viridis heatmap updating at 60ms
   - **JSON Data** -- inline cars dataset
 
-## Performance wins over the original
+## Head-to-head benchmark vs. the original
+
+Both pages loaded back-to-back in the same Chrome (1280×800 viewport, headless), median of 3 runs. Reproduce with `bench/head-to-head.mjs` (see [Benchmarks](#benchmarks)).
+
+| Metric | [Original](https://phosphorjs.github.io/examples/datagrid/) | [This implementation](https://batpigandme.github.io/phosphorjs-challenge/) | Delta |
+|---|---:|---:|---:|
+| Bytes on the wire | 231.1 KB | 20.4 KB | **11.3× lighter** |
+| Bytes decoded (JS+CSS+HTML) | 1.10 MB | 56.1 KB | **20.2× lighter** |
+| HTTP requests | 7 | 4 | — |
+| Load (DCL → networkidle0) | 1031 ms | 877 ms | **1.18× faster** |
+| Idle FPS (120 Hz display) | 120.7 | 120.7 | parity (display-bound) |
+| Scroll FPS (3 s wheel-spam) | 120.0 | 120.0 | parity (display-bound) |
+| Scroll frame interval p50 / p95 / max | 8.30 / 9.20 / 9.40 ms | 8.30 / 9.20 / 9.40 ms | parity |
+| Resize JS time per frame (p50 / max) | 6.10 / 7.00 ms | 5.20 / 6.40 ms | **1.17× faster** |
+| Long tasks during scroll | 0 | 0 | parity |
+| Black flicker on resize-drag | yes | **no** (double-buffered) | — |
+
+Honest summary: at steady state both apps saturate the display refresh rate with no dropped frames, so FPS is not a discriminator on a healthy machine. The wins are **bundle size** (an order of magnitude lighter on the wire, **20× lighter decoded**) and **resize correctness** (no black flicker thanks to the offscreen-buffer + synchronous resize-paint pipeline).
+
+## Architectural notes
 
 | Area | How |
 |---|---|
@@ -43,17 +62,21 @@ The demo reproduces the full interaction surface of the original:
 | **Batched offset fill** | One `fillScreenPositions(...)` call replaces ~92 `offsetOf` calls per visible frame (**9.6×** in d8) |
 | **ctx state caching** | `font` / `textBaseline` / `textAlign` / `fillStyle` cached on the 2D context to skip redundant state writes |
 | **Interned colors** | Viridis LUT is 256 pre-built `rgb(...)` strings; red/green tick palette is shared |
-| **Bundle size** | 44.9 KB raw / 13.2 KB gzipped (JS) vs. the original's ~200 KB Phosphor bundle |
 
 ## Benchmarks
 
-Hot paths are micro-benchmarked with d8 (V8's standalone shell). Run from a checkout:
+Two benchmark harnesses live under `bench/`:
 
 ```sh
+# Hot-path micro-benchmarks via d8 (V8 standalone shell). 12 sections covering
+# SectionList, paint scratch arrays, RAF flush, viridis LUT, etc.
 d8 --allow-natives-syntax bench/d8-hotpaths.js
-```
 
-The harness covers 12 sections: `SectionList` offset/index, xorshift128 PRNG, `RandomDataModel._tick`, ctx-state caching, RAF flush, `_paintBody` scratch arrays, `LargeDataModel.data()` string building, viridis LUT, header `fillStyle` hoisting, `fillScreenPositions`, full-frame offset loops, and grid-line `Math.floor` redundancy.
+# Apples-to-apples comparison vs. the upstream PhosphorJS demo.
+# Drives both pages through the same Chrome with synthetic input. Requires
+# puppeteer-core but doesn't pollute package.json:
+npm i --no-save puppeteer-core && node bench/head-to-head.mjs
+```
 
 ## Getting started
 
@@ -106,6 +129,7 @@ src/
 
 bench/
   d8-hotpaths.js            # 12-section d8 micro-benchmark harness for hot paths
+  head-to-head.mjs          # puppeteer harness comparing this app vs. the original
 
 .github/workflows/
   deploy.yml                # GitHub Pages deploy on push to main (OIDC)

@@ -125,9 +125,20 @@ export class DataGrid {
 		this.canvas.tabIndex = 0;
 		this.canvas.style.outline = 'none';
 		host.appendChild(this.canvas);
-		const ctx = this.canvas.getContext('2d', { alpha: false });
-		if (!ctx) throw new Error('2d context unavailable');
-		this.ctx = ctx;
+		const frontCtx = this.canvas.getContext('2d', { alpha: false });
+		if (!frontCtx) throw new Error('2d context unavailable');
+		this._frontCtx = frontCtx;
+
+		// Double buffering: every paint draws into an offscreen buffer canvas,
+		// then we blit the buffer onto the visible canvas in a single drawImage.
+		// This eliminates the black flicker that appears when ResizeObserver
+		// clears the visible canvas backing store and the rAF paint hasn't run
+		// yet — the visible canvas is only ever updated by atomic blits, never
+		// observed mid-paint.
+		this._buffer = document.createElement('canvas');
+		const bufferCtx = this._buffer.getContext('2d', { alpha: false });
+		if (!bufferCtx) throw new Error('2d buffer context unavailable');
+		this.ctx = bufferCtx;
 
 		this._paint = this._paint.bind(this);
 
@@ -196,10 +207,17 @@ export class DataGrid {
 		this.cssHeight = Math.max(0, rect.height);
 		this.bodyW = Math.max(0, this.cssWidth - this.rowHeaderWidth - SCROLLBAR_SIZE);
 		this.bodyH = Math.max(0, this.cssHeight - this.colHeaderHeight - SCROLLBAR_SIZE);
-		const changed = resizeCanvas(this.canvas, this.cssWidth, this.cssHeight);
+		// Resize the buffer first, paint into it, then resize the visible
+		// canvas (which clears it) and immediately blit. All in one task —
+		// the browser only composites the result, never the empty interim.
+		resizeCanvas(this._buffer, this.cssWidth, this.cssHeight);
+		resizeCanvas(this.canvas, this.cssWidth, this.cssHeight);
 		if (this.stretchLastColumn) this._applyStretchLastColumn();
 		this._mode = 'full';
-		invalidate(this._paint);
+		// Synchronous paint+blit prevents the rAF gap that would otherwise
+		// expose the cleared visible canvas as black flicker mid-drag.
+		cancel(this._paint);
+		this._paint();
 	}
 
 	_applyStretchLastColumn() {
@@ -636,7 +654,17 @@ export class DataGrid {
 
 		this._prevScrollX = this.scrollX;
 		this._prevScrollY = this.scrollY;
+		this._present();
 		notePaint();
+	}
+
+	// Atomic blit of the offscreen buffer onto the visible canvas. Identity
+	// transform + backing-pixel coordinates means a straight pixel copy with
+	// no resampling.
+	_present() {
+		const fctx = this._frontCtx;
+		fctx.setTransform(1, 0, 0, 1, 0, 0);
+		fctx.drawImage(this._buffer, 0, 0);
 	}
 
 	_paintFull() {
@@ -687,11 +715,13 @@ export class DataGrid {
 		const ddw = bw - Math.abs(dx);
 		const ddh = bh - Math.abs(dy);
 
-		// Save & reset to identity to do a backing-pixel copy.
+		// Save & reset to identity to do a backing-pixel copy. Source is the
+		// buffer (which holds the previous frame) — we shift those pixels to
+		// their new screen positions, then paint the newly-exposed strips.
 		ctx.save();
 		ctx.setTransform(1, 0, 0, 1, 0, 0);
 		ctx.drawImage(
-			this.canvas,
+			this._buffer,
 			sxBack,
 			syBack,
 			sw,

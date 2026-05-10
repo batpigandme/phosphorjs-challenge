@@ -12,7 +12,7 @@
 
 ## What this is
 
-A from-scratch reimplementation of the [PhosphorJS DataGrid demo](https://phosphorjs.github.io/examples/datagrid/) with **zero runtime dependencies**. The only dependency is Vite (dev-only, for bundling). Ships as one JS file (44.5 KB raw / 13.1 KB gzipped) plus a 3.2 KB stylesheet.
+A from-scratch reimplementation of the [PhosphorJS DataGrid demo](https://phosphorjs.github.io/examples/datagrid/) with **zero runtime dependencies**. The only dependency is Vite (dev-only, for bundling). Ships as one JS file (44.9 KB raw / 13.2 KB gzipped) plus a 3.2 KB stylesheet.
 
 The demo reproduces the full interaction surface of the original:
 
@@ -32,8 +32,8 @@ The demo reproduces the full interaction surface of the original:
 | Area | How |
 |---|---|
 | **HiDPI rendering** | Canvas backing store sized at `cssW * devicePixelRatio`; crisp on retina |
-| **Canvas hysteresis** | Backing store grows in 512 px granularity; small resizes don't reallocate |
-| **Scroll-blit** | `drawImage` shifts existing pixels on small scroll deltas; only newly-exposed strips are painted |
+| **Double buffering** | Every paint draws into an offscreen buffer canvas; the buffer is blitted to the visible canvas in one atomic `drawImage`. The resize handler does the resize + paint + blit synchronously in one task, so the cleared backing store is never composited — no black flicker mid-drag |
+| **Scroll-blit** | `drawImage` shifts existing pixels on small scroll deltas; only newly-exposed strips are painted (source = the buffer's previous frame) |
 | **Single rAF coalesce** | All grids share one `requestAnimationFrame` scheduler; multiple invalidations per tick collapse to one paint per grid |
 | **ResizeObserver** | Per-grid observation; only changed grids reflow (original uses `window.onresize` for the whole tree) |
 | **Pointer Events** | `setPointerCapture` for reliable drag tracking; no document-level mousemove leaks |
@@ -43,7 +43,7 @@ The demo reproduces the full interaction surface of the original:
 | **Batched offset fill** | One `fillScreenPositions(...)` call replaces ~92 `offsetOf` calls per visible frame (**9.6×** in d8) |
 | **ctx state caching** | `font` / `textBaseline` / `textAlign` / `fillStyle` cached on the 2D context to skip redundant state writes |
 | **Interned colors** | Viridis LUT is 256 pre-built `rgb(...)` strings; red/green tick palette is shared |
-| **Bundle size** | 44.5 KB raw / 13.1 KB gzipped (JS) vs. the original's ~200 KB Phosphor bundle |
+| **Bundle size** | 44.9 KB raw / 13.2 KB gzipped (JS) vs. the original's ~200 KB Phosphor bundle |
 
 ## Benchmarks
 

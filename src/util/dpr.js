@@ -1,33 +1,27 @@
 // HiDPI canvas sizing. Backing store at css * dpr; transform scaled so that
 // drawing in CSS pixels maps 1:1 to backing pixels and stays crisp on retina.
-//
-// The Phosphor demo predates a lot of HiDPI hygiene; on a 2x display its
-// text antialiasing is noticeably soft. We get crisp text for free by
-// resizing on every observed dimension change.
 
 /**
  * Resize a canvas to (cssWidth, cssHeight) accounting for devicePixelRatio.
  * Returns true if the backing store actually changed (caller should repaint).
+ *
+ * Backing store is sized to exact CSS×DPR — the browser stretches the entire
+ * backing store into the CSS display rect, so over-allocating causes black
+ * bands at the margins. CSS-only canvases (no DOM parent) still need both
+ * dimensions set for drawImage to behave consistently.
  *
  * @param {HTMLCanvasElement} canvas
  * @param {number} cssWidth
  * @param {number} cssHeight
  * @returns {boolean}
  */
-const GRANULARITY = 512;
-
 export function resizeCanvas(canvas, cssWidth, cssHeight) {
 	const dpr = window.devicePixelRatio || 1;
 	const needW = Math.max(1, Math.round(cssWidth * dpr));
 	const needH = Math.max(1, Math.round(cssHeight * dpr));
-	const curW = canvas.width;
-	const curH = canvas.height;
-	// Always set backing store to exact size — the browser stretches the full
-	// backing store into the CSS display rect, so over-allocating causes black
-	// bands at the margins.
 	canvas.style.width = cssWidth + 'px';
 	canvas.style.height = cssHeight + 'px';
-	if (needW === curW && needH === curH) {
+	if (needW === canvas.width && needH === canvas.height) {
 		return false;
 	}
 	canvas.width = needW;

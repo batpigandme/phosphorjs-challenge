@@ -909,7 +909,12 @@ export class DataGrid {
 				const cw = colWs[ci];
 				ctx.save();
 				ctx.beginPath();
-				ctx.rect(xx, bodyY, cw, rh);
+				// Clip X to column width only; Y spans the full body so that a
+				// boundary row straddling the strip edge renders its text correctly.
+				// Clipping Y to the strip height would blank the row whenever its
+				// text center falls outside the narrow strip (e.g. rowHeight=28,
+				// delta=5 px → center is 14 px below strip top, outside clip).
+				ctx.rect(xx, by, cw, this.bodyH);
 				ctx.clip();
 				renderer.resetCache();
 				for (let ri = 0; ri < nRows; ri++) {
@@ -1139,12 +1144,14 @@ export class DataGrid {
 			roundRect(ctx, vTrackX + 2, thumbY, SCROLLBAR_SIZE - 4, thumbH, 3);
 			ctx.fill();
 		}
-		// Horizontal scrollbar.
+		// Horizontal scrollbar. Fill from x=0 (not rowHeaderWidth) so the
+		// bottom-left corner below the row headers is also cleared — body cell
+		// text in the non-renderer path has no Y clip and can bleed into it.
 		const hTrackX = this.rowHeaderWidth;
 		const hTrackY = this.cssHeight - SCROLLBAR_SIZE;
 		const hTrackW = this.bodyW;
 		ctx.fillStyle = '#f4f4f4';
-		ctx.fillRect(hTrackX, hTrackY, hTrackW, SCROLLBAR_SIZE);
+		ctx.fillRect(0, hTrackY, hTrackX + hTrackW, SCROLLBAR_SIZE);
 		const totalX = this.cols.totalSize();
 		if (totalX > this.bodyW) {
 			const thumbW = Math.max(MIN_THUMB, (this.bodyW / totalX) * hTrackW);

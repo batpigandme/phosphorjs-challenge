@@ -771,12 +771,10 @@ export class DataGrid {
 			this._paintSelectionsStrips(dx, dy);
 		}
 
-		if (dx !== 0) {
-			this._paintColumnHeaders(0, 0, bw, this.colHeaderHeight);
-		}
-		// Always repaint row headers: row labels change on dy!=0, and on dx!=0
-		// a partially-scrolled first column can bleed text into the header area
-		// that _paintBody doesn't clip away.
+		// Always repaint both header strips: content changes on their respective
+		// scroll axis, AND a partially-scrolled boundary row/col can bleed text
+		// across the axis boundary into the header area in the non-renderer path.
+		this._paintColumnHeaders(0, 0, bw, this.colHeaderHeight);
 		this._paintRowHeaders(0, 0, this.rowHeaderWidth, bh);
 
 		this._paintCorner();

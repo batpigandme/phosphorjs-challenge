@@ -33,14 +33,14 @@ Both pages loaded back-to-back in the same Chrome (1280×800 viewport, headless)
 
 | Metric | [Original](https://phosphorjs.github.io/examples/datagrid/) | [This implementation](https://batpigandme.github.io/phosphorjs-challenge/) | Delta |
 |---|---:|---:|---:|
-| Bytes on the wire | 231.1 KB | 20.4 KB | **11.3× lighter** |
-| Bytes decoded (JS+CSS+HTML) | 1.10 MB | 56.1 KB | **20.2× lighter** |
+| Bytes on the wire | 231.1 KB | 20.7 KB | **11.2× lighter** |
+| Bytes decoded (JS+CSS+HTML) | 1.10 MB | 57.0 KB | **19.9× lighter** |
 | HTTP requests | 7 | 4 | — |
-| Load (DCL → networkidle0) | 1031 ms | 877 ms | **1.18× faster** |
+| Load (DCL → networkidle0) | 1048 ms | 890 ms | **1.18× faster** |
 | Idle FPS (120 Hz display) | 120.7 | 120.7 | parity (display-bound) |
 | Scroll FPS (3 s wheel-spam) | 120.0 | 120.0 | parity (display-bound) |
-| Scroll frame interval p50 / p95 / max | 8.30 / 9.20 / 9.40 ms | 8.30 / 9.20 / 9.40 ms | parity |
-| Resize JS time per frame (p50 / max) | 6.10 / 7.00 ms | 5.20 / 6.40 ms | **1.17× faster** |
+| Scroll frame interval p50 / p95 / max | 8.30 / 9.40 / 13.80 ms | 8.30 / 9.50 / 13.20 ms | parity |
+| Resize JS time per frame (p50 / max) | 6.00 / 9.70 ms | 5.00 / 6.20 ms | **1.20× faster** |
 | Long tasks during scroll | 0 | 0 | parity |
 
 Honest summary: at steady state both apps saturate the display refresh rate with no dropped frames, so FPS is not a discriminator on a healthy machine. The clear win is **bundle size** (an order of magnitude lighter on the wire, **20× lighter decoded**).
